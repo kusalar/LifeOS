@@ -218,16 +218,20 @@ export function IconBadge({
 
 export function Btn({
   title,
+  children,
   onPress,
   variant = 'primary',
+  size,
   icon,
   loading,
   style,
   compact,
 }: {
-  title: string;
+  title?: string;
+  children?: React.ReactNode;
   onPress: () => void;
-  variant?: 'primary' | 'ghost' | 'violet' | 'danger';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'violet' | 'danger';
+  size?: 'small' | 'medium' | 'large';
   icon?: keyof typeof Ionicons.glyphMap;
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -236,12 +240,15 @@ export function Btn({
   const isPrimary = variant === 'primary';
   const isViolet = variant === 'violet';
   const isDanger = variant === 'danger';
+  const isSecondary = variant === 'secondary' || variant === 'ghost';
   const bg = isPrimary
     ? C.amber
     : isViolet
     ? alpha(C.violet, 0.16)
     : isDanger
     ? alpha(C.red, 0.16)
+    : isSecondary
+    ? C.surface2
     : C.surface2;
   const fg = isPrimary
     ? '#1A1206'
@@ -250,6 +257,9 @@ export function Btn({
     : isDanger
     ? C.red
     : C.text;
+
+  const isCompact = compact || size === 'small';
+  const label = typeof children === 'string' ? children : title;
 
   return (
     <Pressable
@@ -264,8 +274,8 @@ export function Btn({
           backgroundColor: bg,
           borderWidth: isPrimary ? 0 : 1,
           borderColor: isViolet ? alpha(C.violet, 0.35) : isDanger ? alpha(C.red, 0.35) : C.border2,
-          paddingVertical: compact ? 9 : 14,
-          paddingHorizontal: compact ? 14 : 18,
+          paddingVertical: isCompact ? 9 : size === 'large' ? 16 : 14,
+          paddingHorizontal: isCompact ? 14 : 18,
           opacity: pressed ? 0.85 : 1,
         },
         style,
@@ -275,8 +285,9 @@ export function Btn({
         <ActivityIndicator size="small" color={fg} />
       ) : (
         <>
-          {icon ? <Ionicons name={icon} size={compact ? 15 : 17} color={fg} /> : null}
-          <Text style={{ color: fg, fontWeight: '800', fontSize: compact ? 13 : 15 }}>{title}</Text>
+          {icon ? <Ionicons name={icon} size={isCompact ? 15 : 17} color={fg} /> : null}
+          {label ? <Text style={{ color: fg, fontWeight: '800', fontSize: isCompact ? 13 : 15 }}>{label}</Text> : null}
+          {typeof children !== 'string' ? children : null}
         </>
       )}
     </Pressable>

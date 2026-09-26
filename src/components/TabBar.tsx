@@ -9,6 +9,7 @@ import { alpha, C, R, shadow } from '../theme';
 const TABS: Record<string, { icon: string; iconActive: string }> = {
   Today: { icon: 'home-outline', iconActive: 'home' },
   Plan: { icon: 'sparkles-outline', iconActive: 'sparkles' },
+  Projects: { icon: 'folder-outline', iconActive: 'folder' },
   Money: { icon: 'wallet-outline', iconActive: 'wallet' },
   Report: { icon: 'stats-chart-outline', iconActive: 'stats-chart' },
 };

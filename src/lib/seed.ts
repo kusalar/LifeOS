@@ -1,9 +1,36 @@
-import type { AppState, Expense, Reminder, Task } from '../types';
-import { atTime, uid } from './dates';
+import type { AppState, DailyReview, Expense, FocusSession, Habit, HabitCompletion, Project, Reminder, Task } from '../types';
+import { atTime, localDateKey, shiftDateKey, uid } from './dates';
 import { buildSchedule, parsePlan } from './engine';
 
 export const SEED_INPUT =
   'I have college at 10, need to study 3 hours, buy groceries and finish my assignment.';
+
+function seedProjects(): Project[] {
+  return [
+    {
+      id: 'proj-vlsi',
+      name: 'VLSI Training',
+      description: 'Digital electronics coursework, combinational logic design, and report',
+      status: 'active',
+      createdAt: Date.now() - 5 * 86400000,
+      updatedAt: Date.now() - 86400000,
+      deadline: atTime(6, 18 * 60), // Due in 6 days
+      color: '#60A5FA',
+      icon: 'hardware-chip-outline',
+    },
+    {
+      id: 'proj-capstone',
+      name: 'Campus Capstone',
+      description: 'Autonomous systems capstone project with Prof. Mehta',
+      status: 'active',
+      createdAt: Date.now() - 10 * 86400000,
+      updatedAt: Date.now() - 2 * 86400000,
+      deadline: atTime(14, 17 * 60), // Due in 14 days
+      color: '#A78BFA',
+      icon: 'school-outline',
+    },
+  ];
+}
 
 function seedExpenses(): Expense[] {
   const out: Expense[] = [];
@@ -90,7 +117,7 @@ function seedReminders(): Reminder[] {
 function seedTasks(): Task[] {
   return [
     {
-      id: uid(),
+      id: 'task-seed-1',
       title: 'Revise Ch. 3 — Sequential Circuits',
       priority: 'critical',
       dueTs: atTime(0, 19 * 60), // Due today
@@ -98,9 +125,11 @@ function seedTasks(): Task[] {
       done: false,
       note: 'Focus on Flip-flops and state diagrams',
       createdAt: Date.now() - 86400000,
+      projectId: 'proj-vlsi',
+      estimatedMinutes: 60,
     },
     {
-      id: uid(),
+      id: 'task-seed-2',
       title: 'Draft conclusion for Assignment 4',
       priority: 'critical',
       dueTs: atTime(0, 16 * 60), // Due today
@@ -108,9 +137,23 @@ function seedTasks(): Task[] {
       done: false,
       note: 'Include simulation waveforms',
       createdAt: Date.now() - 43200000,
+      projectId: 'proj-vlsi',
+      estimatedMinutes: 45,
     },
     {
-      id: uid(),
+      id: 'task-seed-3',
+      title: 'Simulate 4-bit Counter testbench',
+      priority: 'important',
+      dueTs: atTime(2, 18 * 60),
+      tag: 'Academic',
+      done: false,
+      note: 'ModelSim verification',
+      createdAt: Date.now() - 25000000,
+      projectId: 'proj-vlsi',
+      estimatedMinutes: 50,
+    },
+    {
+      id: 'task-seed-4',
       title: 'Reply to Prof. Mehta about capstone project',
       priority: 'important',
       dueTs: atTime(1, 12 * 60), // Tomorrow
@@ -118,33 +161,175 @@ function seedTasks(): Task[] {
       done: false,
       note: 'Send GitHub repo link',
       createdAt: Date.now() - 36000000,
+      projectId: 'proj-capstone',
+      estimatedMinutes: 20,
     },
     {
-      id: uid(),
+      id: 'task-seed-5',
       title: 'Buy lab record notebook & blue pens',
       priority: 'normal',
       dueTs: atTime(1, 18 * 60),
       tag: 'Errand',
       done: false,
       createdAt: Date.now() - 20000000,
+      estimatedMinutes: 30,
     },
     {
-      id: uid(),
+      id: 'task-seed-6',
       title: '30 min DSA graph practice',
       priority: 'important',
       dueTs: atTime(0, 8 * 60),
       tag: 'Habit',
       done: true,
       createdAt: Date.now() - 86400000,
+      estimatedMinutes: 30,
     },
     {
-      id: uid(),
+      id: 'task-seed-7',
       title: 'Upload study group notes to drive',
       priority: 'normal',
       dueTs: atTime(-1, 18 * 60),
       tag: 'College',
       done: true,
       createdAt: Date.now() - 172800000,
+      projectId: 'proj-vlsi',
+      estimatedMinutes: 15,
+    },
+  ];
+}
+
+function seedHabits(): Habit[] {
+  return [
+    {
+      id: 'habit-study',
+      name: 'Study & Deep Work',
+      description: 'Minimum 45 mins focused study with no feeds',
+      frequency: 'daily',
+      targetPerPeriod: 1,
+      createdAt: Date.now() - 14 * 86400000,
+      active: true,
+      icon: 'book-outline',
+      color: '#A78BFA',
+    },
+    {
+      id: 'habit-exercise',
+      name: 'Workout / Physical Activity',
+      description: 'Gym, running, or stretching',
+      frequency: 'daily',
+      targetPerPeriod: 1,
+      createdAt: Date.now() - 14 * 86400000,
+      active: true,
+      icon: 'barbell-outline',
+      color: '#F472B6',
+    },
+    {
+      id: 'habit-reading',
+      name: 'Read 20 Mins',
+      description: 'Books or technical papers',
+      frequency: 'daily',
+      targetPerPeriod: 1,
+      createdAt: Date.now() - 10 * 86400000,
+      active: true,
+      icon: 'reader-outline',
+      color: '#60A5FA',
+    },
+    {
+      id: 'habit-meditation',
+      name: 'Mindful Breathing',
+      description: 'Morning or night 10-min breathwork',
+      frequency: 'daily',
+      targetPerPeriod: 1,
+      createdAt: Date.now() - 7 * 86400000,
+      active: true,
+      icon: 'flower-outline',
+      color: '#2DD4BF',
+    },
+  ];
+}
+
+function seedHabitCompletions(): HabitCompletion[] {
+  const todayKey = localDateKey();
+  const d1 = shiftDateKey(todayKey, -1);
+  const d2 = shiftDateKey(todayKey, -2);
+  const d3 = shiftDateKey(todayKey, -3);
+  const d4 = shiftDateKey(todayKey, -4);
+  const d5 = shiftDateKey(todayKey, -5);
+
+  return [
+    // Study streak = 6 days (including today)
+    { id: uid(), habitId: 'habit-study', dateKey: todayKey, completedAt: Date.now() - 3600000 },
+    { id: uid(), habitId: 'habit-study', dateKey: d1, completedAt: Date.now() - 86400000 },
+    { id: uid(), habitId: 'habit-study', dateKey: d2, completedAt: Date.now() - 2 * 86400000 },
+    { id: uid(), habitId: 'habit-study', dateKey: d3, completedAt: Date.now() - 3 * 86400000 },
+    { id: uid(), habitId: 'habit-study', dateKey: d4, completedAt: Date.now() - 4 * 86400000 },
+    { id: uid(), habitId: 'habit-study', dateKey: d5, completedAt: Date.now() - 5 * 86400000 },
+
+    // Exercise streak = 3 days (d1, d2, d3, but not yet today)
+    { id: uid(), habitId: 'habit-exercise', dateKey: d1, completedAt: Date.now() - 86400000 },
+    { id: uid(), habitId: 'habit-exercise', dateKey: d2, completedAt: Date.now() - 2 * 86400000 },
+    { id: uid(), habitId: 'habit-exercise', dateKey: d3, completedAt: Date.now() - 3 * 86400000 },
+
+    // Reading completed yesterday
+    { id: uid(), habitId: 'habit-reading', dateKey: d1, completedAt: Date.now() - 86400000 },
+  ];
+}
+
+function seedFocusSessions(): FocusSession[] {
+  const now = Date.now();
+  return [
+    {
+      id: uid(),
+      taskId: 'task-seed-6',
+      startedAt: now - 3600000 * 5,
+      endedAt: now - 3600000 * 5 + 30 * 60000,
+      durationMinutes: 30,
+      completed: true,
+    },
+    {
+      id: uid(),
+      taskId: 'task-seed-7',
+      projectId: 'proj-vlsi',
+      startedAt: now - 86400000 - 3600000 * 3,
+      endedAt: now - 86400000 - 3600000 * 3 + 45 * 60000,
+      durationMinutes: 45,
+      completed: true,
+    },
+    {
+      id: uid(),
+      taskId: 'task-seed-1',
+      projectId: 'proj-vlsi',
+      startedAt: now - 2 * 86400000,
+      endedAt: now - 2 * 86400000 + 40 * 60000,
+      durationMinutes: 40,
+      completed: true,
+    },
+    {
+      id: uid(),
+      taskId: 'task-seed-4',
+      projectId: 'proj-capstone',
+      startedAt: now - 3 * 86400000,
+      endedAt: now - 3 * 86400000 + 35 * 60000,
+      durationMinutes: 35,
+      completed: true,
+    },
+  ];
+}
+
+function seedDailyReviews(): DailyReview[] {
+  const todayKey = localDateKey();
+  const d1 = shiftDateKey(todayKey, -1);
+  return [
+    {
+      dateKey: d1,
+      completedTasks: 3,
+      completedHabits: 2,
+      focusMinutes: 75,
+      plannedMinutes: 240,
+      spentAmount: 380,
+      mood: 'good',
+      reflection: 'Good focus in the evening. VLSI simulation progressed nicely.',
+      createdAt: Date.now() - 86400000,
+      updatedAt: Date.now() - 86400000,
     },
   ];
 }
@@ -157,9 +342,20 @@ export function makeSeed(): AppState {
     expenses: seedExpenses(),
     reminders: seedReminders(),
     tasks: seedTasks(),
+    projects: seedProjects(),
+    habits: seedHabits(),
+    habitCompletions: seedHabitCompletions(),
+    focusSessions: seedFocusSessions(),
+    dailyReviews: seedDailyReviews(),
+    activeTaskId: null,
+    activeTaskStartedAt: null,
+    activeTaskPausedAt: null,
+    activeTaskAccumulatedMs: 0,
     dailyBudget: 400,
     weeklyBudget: 2800,
     monthlyBudget: 12000,
     reportStreak: 6,
+    workDayStart: 9 * 60, // 09:00
+    workDayEnd: 21 * 60, // 21:00
   };
 }

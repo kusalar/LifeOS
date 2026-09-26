@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,15 +15,24 @@ import {
   SectionHeader,
 } from '../components/ui';
 import {
+  daysUntil,
   dueLabel,
   fmtDateLong,
+  fmtDur,
   fmtTime,
   greeting,
+  isOverdueDay,
   nowMinutes,
   useNow,
 } from '../lib/dates';
 import {
+  getEveningReviewSnapshot,
   getLifeOSRadar,
+  getMorningBrief,
+  getProjectsNeedingAttention,
+  getProjectStats,
+  getTodayHabitsSummary,
+  getUsableTimeToday,
   getWhatToDoNow,
   moneyInsights,
   nowBlock,
@@ -40,33 +49,86 @@ export function TodayScreen({ navigation }: { navigation: any }) {
     completeReminder,
     toggleTask,
     toggleBlock,
+    startTask,
+    pauseTask,
+    resumeTask,
+    stopActiveTask,
+    completeActiveTask,
+    toggleHabit,
   } = useStore();
-  const { openAsk, openExpense, openNowModal, openTask, openReminder } = useUI();
+  const {
+    openAsk,
+    openExpense,
+    openNowModal,
+    openTask,
+    openReminder,
+    openProject,
+    openFocusModal,
+    openHabitSheet,
+    openReviewModal,
+    openHabitsModal,
+  } = useUI();
   const now = useNow(30000);
+  const [briefDismissed, setBriefDismissed] = useState(false);
 
   const schedule = state?.schedule ?? [];
+  const tasks = state?.tasks ?? [];
+  const projects = state?.projects ?? [];
   const { current, next } = nowBlock(schedule, now);
+
+  const usable = useMemo(
+    () => getUsableTimeToday(schedule, now, state?.workDayStart, state?.workDayEnd),
+    [schedule, now, state?.workDayStart, state?.workDayEnd]
+  );
+
   const money = useMemo(
     () => (state ? moneyInsights(state.expenses, state.weeklyBudget, state.dailyBudget, state.monthlyBudget) : null),
     [state]
   );
+
   const radar = useMemo(() => (state ? getLifeOSRadar(state) : []), [state]);
   const whatNow = useMemo(() => (state ? getWhatToDoNow(state) : null), [state]);
+  const attentionProjects = useMemo(() => getProjectsNeedingAttention(projects, tasks), [projects, tasks]);
+  const morningBrief = useMemo(() => (state ? getMorningBrief(state) : null), [state]);
+  const habitsSummary = useMemo(
+    () => (state ? getTodayHabitsSummary(state.habits ?? [], state.habitCompletions ?? []) : null),
+    [state]
+  );
+  const eveningSnapshot = useMemo(() => (state ? getEveningReviewSnapshot(state) : null), [state]);
 
   if (!state || !money) return <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} />;
 
   const progress = current ? Math.round(((nowMinutes(now) - current.start) / (current.end - current.start)) * 100) : 0;
 
-  // Urgent/Critical Attention Items
-  const attentionTasks = state.tasks
+  // Active focused task if user started one
+  const activeTask = state.activeTaskId
+    ? tasks.find((t) => t.id === state.activeTaskId && !t.done)
+    : null;
+
+  // Derive active focus elapsed time
+  const isRunning = Boolean(state.activeTaskStartedAt);
+  const isPaused = Boolean(state.activeTaskPausedAt);
+  const accumulatedMs = state.activeTaskAccumulatedMs ?? 0;
+  const runningElapsedMs = isRunning && state.activeTaskStartedAt ? Math.max(0, now.getTime() - state.activeTaskStartedAt) : 0;
+  const activeElapsedMins = Math.floor((accumulatedMs + runningElapsedMs) / 60000);
+
+  // Snapshot calculations
+  const priorityTasksCount = tasks.filter((t) => !t.done && (t.priority === 'critical' || t.priority === 'important')).length;
+  const upcomingDeadlinesCount =
+    tasks.filter((t) => !t.done && !isOverdueDay(t.dueTs) && daysUntil(t.dueTs) <= 2).length +
+    projects.filter((p) => p.status === 'active' && p.deadline && daysUntil(p.deadline) <= 3).length;
+
+  const attentionTasks = tasks
     .filter((t) => !t.done && (t.priority === 'critical' || t.priority === 'important'))
     .slice(0, 3);
 
-  const newDetections = state.reminders.filter((r) => r.status === 'new');
-  const trackedReminders = state.reminders
+  const newDetections = (state.reminders ?? []).filter((r) => r.status === 'new');
+  const trackedReminders = (state.reminders ?? [])
     .filter((r) => r.status === 'tracked')
     .sort((a, b) => a.dueTs - b.dueTs)
     .slice(0, 4);
+
+  const isEvening = now.getHours() >= 18;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
@@ -74,13 +136,20 @@ export function TodayScreen({ navigation }: { navigation: any }) {
         contentContainerStyle={{ padding: S.l, paddingBottom: 130 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header: Date & Greeting */}
+        {/* 1. TODAY HEADER & MORNING BRIEF */}
         <Animated.View entering={FadeInDown.springify()} style={{ flexDirection: 'row', alignItems: 'center' }}>
           <View style={{ flex: 1 }}>
-            <Text style={{ color: C.text, fontSize: 26, fontWeight: '800' }}>
-              {greeting(now)}, {state.name} ☀️
+            <Text style={{ color: C.amber, fontSize: 12, fontWeight: '800', letterSpacing: 1.5, textTransform: 'uppercase' }}>
+              {greeting(now)}
             </Text>
-            <Text style={{ color: C.sub, fontSize: 13, marginTop: 2 }}>{fmtDateLong(now)}</Text>
+            <Text style={{ color: C.text, fontSize: 24, fontWeight: '800', marginTop: 2 }}>
+              {fmtDateLong(now)}
+            </Text>
+            <Text style={{ color: C.sub, fontSize: 13.5, fontWeight: '600', marginTop: 4 }}>
+              {usable.remainingUsableMinutes > 0
+                ? `You have ${usable.formattedRemaining} of usable time today.`
+                : 'Your daily focus window is wrapping up. Rest and recharge.'}
+            </Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <Pressable
@@ -102,35 +171,297 @@ export function TodayScreen({ navigation }: { navigation: any }) {
           </View>
         </Animated.View>
 
-        {/* Status Chips */}
-        <Animated.View entering={FadeInDown.delay(50).springify()} style={{ flexDirection: 'row', gap: 8, marginTop: S.m }}>
-          <Chip color={C.amber}>
-            <Ionicons name="flame" size={13} color={C.amber} />
-            <Text style={{ color: C.amber, fontSize: 12, fontWeight: '700' }}>{state.reportStreak}-day streak</Text>
-          </Chip>
-          <Chip color={C.blue}>
-            <Ionicons name="calendar-outline" size={13} color={C.blue} />
-            <Text style={{ color: C.blue, fontSize: 12, fontWeight: '700' }}>
-              {state.tasks.filter((t) => t.done).length}/{state.tasks.length} tasks done
-            </Text>
-          </Chip>
+        {/* PHASE 4: MORNING DAILY BRIEF */}
+        {morningBrief && !briefDismissed && (
+          <Animated.View entering={FadeInDown.delay(30).springify()}>
+            <Card
+              style={{
+                marginTop: S.m,
+                backgroundColor: alpha(C.amber, 0.08),
+                borderColor: alpha(C.amber, 0.35),
+                padding: S.m,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="sunny" size={15} color={C.amber} />
+                  <Label style={{ color: C.amber, fontWeight: '800' }}>{greeting(now).toUpperCase()}</Label>
+                </View>
+                <Pressable onPress={() => setBriefDismissed(true)} hitSlop={10}>
+                  <Ionicons name="close" size={16} color={C.faint} />
+                </Pressable>
+              </View>
+
+              <Text style={{ color: C.text, fontSize: 13.5, lineHeight: 19 }}>
+                Today you have{' '}
+                <Text style={{ fontWeight: '700', color: C.amber }}>{morningBrief.priorityTasksCount} priority tasks</Text>,{' '}
+                <Text style={{ fontWeight: '700', color: C.blue }}>{morningBrief.scheduledBlocksCount} scheduled blocks</Text>, and{' '}
+                <Text style={{ fontWeight: '700', color: C.pink }}>{morningBrief.habitsRemainingCount} habits</Text> remaining.
+              </Text>
+
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginTop: 10,
+                  paddingTop: 8,
+                  borderTopWidth: 1,
+                  borderTopColor: alpha(C.amber, 0.2),
+                }}
+              >
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={{ color: C.faint, fontSize: 11, fontWeight: '700' }}>MAIN FOCUS</Text>
+                  <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }} numberOfLines={1}>
+                    {morningBrief.mainFocusTitle}
+                  </Text>
+                </View>
+                <Btn
+                  variant="primary"
+                  compact
+                  icon="play"
+                  onPress={() => {
+                    if (whatNow?.taskId) {
+                      openFocusModal(whatNow.taskId);
+                    } else {
+                      openNowModal();
+                    }
+                  }}
+                >
+                  Start My Day
+                </Btn>
+              </View>
+            </Card>
+          </Animated.View>
+        )}
+
+        {/* 2. DAILY SNAPSHOT */}
+        <Animated.View entering={FadeInDown.delay(50).springify()} style={{ marginTop: S.m }}>
+          <Card style={{ backgroundColor: C.surface, borderColor: C.border2, padding: S.m }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: S.m }}>
+              <Ionicons name="speedometer-outline" size={14} color={C.amber} />
+              <Label style={{ color: C.amber }}>Daily Snapshot</Label>
+              <View style={{ flex: 1 }} />
+              <Text style={{ color: C.faint, fontSize: 11.5, fontWeight: '700' }}>
+                {state.reportStreak}-day streak 🔥
+              </Text>
+            </View>
+
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {/* Priority Tasks */}
+              <View
+                style={{
+                  flex: 1,
+                  minWidth: 95,
+                  backgroundColor: C.surface2,
+                  borderRadius: R.l,
+                  padding: 10,
+                  borderWidth: 1,
+                  borderColor: C.border,
+                }}
+              >
+                <Text style={{ color: priorityTasksCount > 0 ? C.amber : C.green, fontSize: 17, fontWeight: '800' }}>
+                  {priorityTasksCount}
+                </Text>
+                <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                  Priority tasks
+                </Text>
+              </View>
+
+              {/* Scheduled Time */}
+              <View
+                style={{
+                  flex: 1,
+                  minWidth: 95,
+                  backgroundColor: C.surface2,
+                  borderRadius: R.l,
+                  padding: 10,
+                  borderWidth: 1,
+                  borderColor: C.border,
+                }}
+              >
+                <Text style={{ color: C.blue, fontSize: 17, fontWeight: '800' }}>
+                  {usable.formattedScheduled}
+                </Text>
+                <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                  Scheduled
+                </Text>
+              </View>
+
+              {/* Usable Time Remaining */}
+              <View
+                style={{
+                  flex: 1,
+                  minWidth: 95,
+                  backgroundColor: C.surface2,
+                  borderRadius: R.l,
+                  padding: 10,
+                  borderWidth: 1,
+                  borderColor: C.border,
+                }}
+              >
+                <Text style={{ color: C.teal, fontSize: 17, fontWeight: '800' }}>
+                  {usable.formattedRemaining}
+                </Text>
+                <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                  Available
+                </Text>
+              </View>
+
+              {/* Deadlines Approaching */}
+              <View
+                style={{
+                  flex: 1,
+                  minWidth: 95,
+                  backgroundColor: C.surface2,
+                  borderRadius: R.l,
+                  padding: 10,
+                  borderWidth: 1,
+                  borderColor: C.border,
+                }}
+              >
+                <Text style={{ color: upcomingDeadlinesCount > 0 ? C.red : C.sub, fontSize: 17, fontWeight: '800' }}>
+                  {upcomingDeadlinesCount}
+                </Text>
+                <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                  Deadlines
+                </Text>
+              </View>
+
+              {/* Spending vs Budget */}
+              <View
+                style={{
+                  flex: 1,
+                  minWidth: 120,
+                  backgroundColor: C.surface2,
+                  borderRadius: R.l,
+                  padding: 10,
+                  borderWidth: 1,
+                  borderColor: C.border,
+                }}
+              >
+                <Text
+                  style={{
+                    color: money.remainingDaily >= 0 ? C.green : C.red,
+                    fontSize: 15,
+                    fontWeight: '800',
+                  }}
+                  numberOfLines={1}
+                >
+                  {inr(money.todayTotal)} / {inr(money.dailyBudget)}
+                </Text>
+                <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                  Today's spent
+                </Text>
+              </View>
+            </View>
+          </Card>
         </Animated.View>
 
-        {/* 1. PROMINENT "What Should I Do Now?" BUTTON / HERO CARD */}
-        {whatNow ? (
+        {/* 3. YOUR NEXT MOVE / ACTIVE FOCUS */}
+        {activeTask ? (
           <Animated.View entering={FadeInDown.delay(100).springify()}>
-            <Pressable
-              onPress={openNowModal}
-              style={({ pressed }) => ({
-                marginTop: S.l,
+            <Card
+              style={{
+                marginTop: S.m,
                 borderRadius: R.xl,
-                backgroundColor: alpha(C.violet, 0.14),
+                backgroundColor: alpha(C.green, 0.08),
+                borderWidth: 1.5,
+                borderColor: alpha(C.green, 0.45),
+                padding: S.l,
+                ...shadow,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <View
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 5,
+                    backgroundColor: isRunning ? C.green : C.amber,
+                  }}
+                />
+                <Label style={{ color: isRunning ? C.green : C.amber, fontWeight: '800', letterSpacing: 1.2 }}>
+                  {isRunning ? 'FOCUS SESSION ACTIVE' : 'FOCUS SESSION PAUSED'}
+                </Label>
+                <View style={{ flex: 1 }} />
+                <Text style={{ color: C.text, fontSize: 12, fontWeight: '700' }}>
+                  {activeElapsedMins}m elapsed
+                </Text>
+              </View>
+
+              <Text style={{ color: C.text, fontSize: 20, fontWeight: '800', marginVertical: 2 }}>
+                {activeTask.title}
+              </Text>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                <PriorityBadge priority={activeTask.priority} />
+                {activeTask.projectId ? (
+                  <Chip color={C.blue}>
+                    <Ionicons name="folder-outline" size={12} color={C.blue} />
+                    <Text style={{ color: C.blue, fontSize: 11, fontWeight: '700' }}>
+                      {projects.find((p) => p.id === activeTask.projectId)?.name || 'Project'}
+                    </Text>
+                  </Chip>
+                ) : null}
+                {activeTask.estimatedMinutes ? (
+                  <Text style={{ color: C.sub, fontSize: 12 }}>
+                    Est. {activeTask.estimatedMinutes}m (~{Math.max(0, activeTask.estimatedMinutes - activeElapsedMins)}m left)
+                  </Text>
+                ) : null}
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: S.l }}>
+                <Btn
+                  variant="primary"
+                  icon="expand-outline"
+                  onPress={() => openFocusModal(activeTask.id)}
+                  style={{ flex: 2, backgroundColor: C.violet }}
+                >
+                  Open Focus
+                </Btn>
+                {isRunning ? (
+                  <Btn
+                    variant="secondary"
+                    icon="pause"
+                    onPress={pauseTask}
+                    style={{ flex: 1 }}
+                  >
+                    Pause
+                  </Btn>
+                ) : (
+                  <Btn
+                    variant="secondary"
+                    icon="play"
+                    onPress={resumeTask}
+                    style={{ flex: 1 }}
+                  >
+                    Resume
+                  </Btn>
+                )}
+                <Btn
+                  variant="primary"
+                  icon="checkmark"
+                  onPress={completeActiveTask}
+                  style={{ flex: 1.2, backgroundColor: C.green }}
+                >
+                  Done
+                </Btn>
+              </View>
+            </Card>
+          </Animated.View>
+        ) : whatNow ? (
+          <Animated.View entering={FadeInDown.delay(100).springify()}>
+            <Card
+              style={{
+                marginTop: S.m,
+                borderRadius: R.xl,
+                backgroundColor: alpha(C.violet, 0.12),
                 borderWidth: 1.5,
                 borderColor: alpha(C.violet, 0.45),
                 padding: S.l,
-                opacity: pressed ? 0.9 : 1,
                 ...shadow,
-              })}
+              }}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 <View
@@ -143,23 +474,23 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                     justifyContent: 'center',
                   }}
                 >
-                  <Ionicons name="sparkles" size={14} color={C.violet} />
+                  <Ionicons name="sparkles" size={13} color={C.violet} />
                 </View>
-                <Label style={{ color: C.violet, fontSize: 11.5, fontWeight: '800' }}>
-                  What Should I Do Now?
+                <Label style={{ color: C.violet, fontSize: 11, fontWeight: '800', letterSpacing: 1.2 }}>
+                  YOUR NEXT MOVE
                 </Label>
                 <View style={{ flex: 1 }} />
-                <Ionicons name="chevron-forward" size={18} color={C.violet} />
+                <Pressable onPress={openNowModal} hitSlop={8}>
+                  <Text style={{ color: C.violet, fontSize: 12, fontWeight: '700' }}>Why? →</Text>
+                </Pressable>
               </View>
 
-              <Text style={{ color: C.text, fontSize: 18, fontWeight: '800', marginTop: 2 }}>
+              <Text style={{ color: C.text, fontSize: 20, fontWeight: '800', marginTop: 4 }}>
                 {whatNow.actionTitle}
               </Text>
-              <Text style={{ color: C.sub, fontSize: 13, marginTop: 4, lineHeight: 18 }} numberOfLines={2}>
-                {whatNow.reason}
-              </Text>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: S.m }}>
+              {/* Badges / Context row */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                 <View
                   style={{
                     borderRadius: R.pill,
@@ -174,21 +505,73 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                     {whatNow.category}
                   </Text>
                 </View>
+
+                {whatNow.projectName ? (
+                  <Chip color={C.blue}>
+                    <Ionicons name="folder-outline" size={11} color={C.blue} />
+                    <Text style={{ color: C.blue, fontSize: 11, fontWeight: '700' }}>
+                      {whatNow.projectName}
+                    </Text>
+                  </Chip>
+                ) : null}
+
                 {whatNow.durationMins ? (
                   <Text style={{ color: C.faint, fontSize: 12, fontWeight: '600' }}>
-                    ~{whatNow.durationMins} mins
+                    ~{whatNow.durationMins} min
                   </Text>
                 ) : null}
-                <View style={{ flex: 1 }} />
-                <Text style={{ color: C.violet, fontSize: 12, fontWeight: '800' }}>
-                  Tap to act →
-                </Text>
               </View>
-            </Pressable>
+
+              <Text style={{ color: C.sub, fontSize: 13, marginTop: 8, lineHeight: 19 }}>
+                {whatNow.reason}
+              </Text>
+
+              {/* Action buttons */}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: S.m }}>
+                {whatNow.taskId ? (
+                  <>
+                    <Btn
+                      variant="primary"
+                      icon="flash-outline"
+                      onPress={() => openFocusModal(whatNow.taskId)}
+                      style={{ flex: 2, backgroundColor: C.violet }}
+                    >
+                      START FOCUS
+                    </Btn>
+                    <Btn
+                      variant="secondary"
+                      icon="checkmark"
+                      onPress={() => toggleTask(whatNow.taskId!)}
+                      style={{ flex: 1 }}
+                    >
+                      Done
+                    </Btn>
+                  </>
+                ) : whatNow.blockId ? (
+                  <Btn
+                    variant="primary"
+                    icon="checkmark"
+                    onPress={() => toggleBlock(whatNow.blockId!)}
+                    style={{ flex: 1 }}
+                  >
+                    Mark Block Done
+                  </Btn>
+                ) : (
+                  <Btn
+                    variant="secondary"
+                    icon="sparkles"
+                    onPress={openNowModal}
+                    style={{ flex: 1 }}
+                  >
+                    View Action
+                  </Btn>
+                )}
+              </View>
+            </Card>
           </Animated.View>
         ) : null}
 
-        {/* 2. LIFEOS RADAR SECTION */}
+        {/* 4. ATTENTION / RADAR */}
         {radar.length > 0 ? (
           <>
             <SectionHeader
@@ -222,6 +605,8 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                           ? 'trending-up'
                           : r.type === 'deadline'
                           ? 'time'
+                          : r.type === 'project_deadline' || r.type === 'project_blocked'
+                          ? 'folder'
                           : 'bulb'
                       }
                       color={
@@ -244,9 +629,8 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                     </View>
                     {r.actionText ? (
                       <Btn
-                        title={r.actionText}
+                        variant={r.urgency === 'critical' ? 'primary' : 'secondary'}
                         compact
-                        variant={r.urgency === 'critical' ? 'danger' : 'ghost'}
                         onPress={() => {
                           if (r.targetId && r.actionType === 'task') {
                             toggleTask(r.targetId);
@@ -254,9 +638,13 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                             rememberReminder(r.targetId);
                           } else if (r.actionType === 'money') {
                             navigation.navigate('Money');
+                          } else if (r.actionType === 'project') {
+                            navigation.navigate('Projects');
                           }
                         }}
-                      />
+                      >
+                        {r.actionText}
+                      </Btn>
                     ) : null}
                   </View>
                 </Card>
@@ -265,11 +653,196 @@ export function TodayScreen({ navigation }: { navigation: any }) {
           </>
         ) : null}
 
-        {/* 3. WHAT NEEDS ATTENTION */}
+        {/* 5. TODAY'S HABITS */}
+        {habitsSummary && habitsSummary.totalActive > 0 ? (
+          <>
+            <SectionHeader
+              title="Today's Habits"
+              icon="repeat-outline"
+              right={`${habitsSummary.completedCount} / ${habitsSummary.totalActive} complete`}
+              onRightPress={openHabitsModal}
+            />
+            <Animated.View entering={FadeInDown.delay(150).springify()}>
+              <Card style={{ padding: S.m }}>
+                {habitsSummary.habits.slice(0, 4).map((h, i) => {
+                  const color = h.habit.color || C.violet;
+                  return (
+                    <Pressable
+                      key={h.habit.id}
+                      onPress={() => toggleHabit(h.habit.id)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 12,
+                        paddingVertical: 9,
+                        borderTopWidth: i === 0 ? 0 : 1,
+                        borderTopColor: C.border,
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 6,
+                          borderWidth: 1.5,
+                          borderColor: h.completed ? color : C.border,
+                          backgroundColor: h.completed ? color : 'transparent',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {h.completed && <Ionicons name="checkmark" size={14} color={C.bg} />}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={{
+                            color: h.completed ? C.faint : C.text,
+                            fontSize: 14,
+                            fontWeight: '700',
+                            textDecorationLine: h.completed ? 'line-through' : 'none',
+                          }}
+                        >
+                          {h.habit.name}
+                        </Text>
+                      </View>
+                      {h.currentStreak > 0 ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                          <Ionicons name="flame" size={12} color={C.amber} />
+                          <Text style={{ color: C.amber, fontSize: 12, fontWeight: '700' }}>
+                            {h.currentStreak}d
+                          </Text>
+                        </View>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginTop: 8,
+                    paddingTop: 8,
+                    borderTopWidth: 1,
+                    borderTopColor: C.border,
+                  }}
+                >
+                  <Text style={{ color: C.faint, fontSize: 12 }}>
+                    {habitsSummary.completedCount === habitsSummary.totalActive
+                      ? 'All habits completed today ✨'
+                      : `${habitsSummary.totalActive - habitsSummary.completedCount} left to do`}
+                  </Text>
+                  <Pressable onPress={openHabitsModal} hitSlop={8}>
+                    <Text style={{ color: C.violet, fontSize: 12, fontWeight: '700' }}>Manage Habits →</Text>
+                  </Pressable>
+                </View>
+              </Card>
+            </Animated.View>
+          </>
+        ) : null}
+
+        {/* 6. PROJECTS NEEDING ATTENTION */}
+        {attentionProjects.length > 0 ? (
+          <>
+            <SectionHeader
+              title="Projects Needing Attention"
+              icon="folder-outline"
+              right="View All"
+              onRightPress={() => navigation.navigate('Projects')}
+            />
+            {attentionProjects.slice(0, 2).map((item, i) => {
+              const col = item.project.color || C.blue;
+              return (
+                <Animated.View key={item.project.id} entering={FadeInDown.delay(160 + i * 40).springify()}>
+                  <Card style={{ marginBottom: S.s, borderColor: alpha(col, 0.4) }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <IconBadge
+                        icon={(item.project.icon as any) || 'folder-outline'}
+                        color={col}
+                        size={36}
+                        iconSize={18}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>
+                          {item.project.name}
+                        </Text>
+                        <Text style={{ color: C.sub, fontSize: 12, marginTop: 1 }}>
+                          {item.reason}
+                        </Text>
+                      </View>
+                      <Btn
+                        variant="secondary"
+                        compact
+                        onPress={() => navigation.navigate('Projects')}
+                      >
+                        View
+                      </Btn>
+                    </View>
+
+                    <View style={{ marginTop: 10 }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ color: C.faint, fontSize: 11 }}>
+                          {item.stats.completed}/{item.stats.total} tasks
+                        </Text>
+                        <Text style={{ color: col, fontSize: 11, fontWeight: '800' }}>
+                          {item.stats.pct}%
+                        </Text>
+                      </View>
+                      <Bar pct={item.stats.pct} color={col} height={5} />
+                    </View>
+                  </Card>
+                </Animated.View>
+              );
+            })}
+          </>
+        ) : null}
+
+        {/* 7. DAILY REVIEW CARD */}
+        {eveningSnapshot && (isEvening || eveningSnapshot.existingReview) ? (
+          <>
+            <SectionHeader
+              title="Daily Review"
+              icon="moon-outline"
+              right={eveningSnapshot.existingReview ? 'Reviewed ✓' : 'Reflect on Today'}
+              onRightPress={() => openReviewModal()}
+            />
+            <Animated.View entering={FadeInDown.delay(170).springify()}>
+              <Card
+                style={{
+                  borderColor: eveningSnapshot.existingReview ? alpha(C.green, 0.4) : alpha(C.amber, 0.35),
+                  backgroundColor: alpha(C.amber, 0.06),
+                  padding: S.m,
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: C.text, fontSize: 14, fontWeight: '700' }}>
+                      {eveningSnapshot.existingReview ? 'Today’s Reflection Saved' : 'Time for Evening Review'}
+                    </Text>
+                    <Text style={{ color: C.sub, fontSize: 12, marginTop: 2 }}>
+                      {eveningSnapshot.completedTasksCount} tasks · {fmtDur(eveningSnapshot.focusMinutesToday)} focused · {eveningSnapshot.completedHabitsCount}/{eveningSnapshot.totalHabitsCount} habits
+                    </Text>
+                  </View>
+                  <Btn
+                    variant={eveningSnapshot.existingReview ? 'secondary' : 'primary'}
+                    compact
+                    icon="journal-outline"
+                    onPress={() => openReviewModal()}
+                  >
+                    {eveningSnapshot.existingReview ? 'Edit' : 'Review Day'}
+                  </Btn>
+                </View>
+              </Card>
+            </Animated.View>
+          </>
+        ) : null}
+
+        {/* WHAT NEEDS ATTENTION (Tasks) */}
         <SectionHeader
           title="What Needs Attention"
           icon="alert-circle-outline"
-          right="Tasks & Deadlines"
+          right="All Tasks"
           onRightPress={() => navigation.navigate('Plan')}
         />
         <Animated.View entering={FadeInDown.delay(180).springify()}>
@@ -308,6 +881,7 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                     </Text>
                     <Text style={{ color: C.faint, fontSize: 11.5, marginTop: 1 }}>
                       {dueLabel(t.dueTs)} · {t.tag || 'General'}
+                      {t.projectId ? ` · ${projects.find((p) => p.id === t.projectId)?.name || 'Project'}` : ''}
                     </Text>
                   </View>
                   <PriorityBadge priority={t.priority} />
@@ -317,11 +891,11 @@ export function TodayScreen({ navigation }: { navigation: any }) {
           </Card>
         </Animated.View>
 
-        {/* 4. TODAY'S PLAN (Schedule Blocks) */}
+        {/* TODAY'S PLAN (Schedule Blocks) */}
         <SectionHeader
           title="Today's Plan"
           icon="calendar-outline"
-          right="View full schedule"
+          right="View Timeline"
           onRightPress={() => navigation.navigate('Plan')}
         />
         <Animated.View entering={FadeInDown.delay(220).springify()}>
@@ -390,11 +964,11 @@ export function TodayScreen({ navigation }: { navigation: any }) {
           </Card>
         </Animated.View>
 
-        {/* 5. MONEY TODAY SUMMARY */}
+        {/* MONEY TODAY */}
         <SectionHeader
           title="Money Today"
           icon="wallet-outline"
-          right="View all spends"
+          right="View Spends"
           onRightPress={() => navigation.navigate('Money')}
         />
         <Animated.View entering={FadeInDown.delay(260).springify()}>
@@ -402,7 +976,7 @@ export function TodayScreen({ navigation }: { navigation: any }) {
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <View style={{ flex: 1 }}>
                 <Label>Spent Today</Label>
-                <Text style={{ color: C.text, fontSize: 32, fontWeight: '800', marginTop: 2 }}>
+                <Text style={{ color: C.text, fontSize: 30, fontWeight: '800', marginTop: 2 }}>
                   {inr(money.todayTotal)}
                 </Text>
                 <Text
@@ -426,7 +1000,7 @@ export function TodayScreen({ navigation }: { navigation: any }) {
               />
             </View>
 
-            {/* Quick spend category pills */}
+            {/* Spend pills */}
             <View style={{ flexDirection: 'row', gap: 6, marginTop: S.m, flexWrap: 'wrap' }}>
               {money.byCat.map((c) => (
                 <Chip key={c.cat} color={C.amber}>
@@ -439,7 +1013,7 @@ export function TodayScreen({ navigation }: { navigation: any }) {
           </Card>
         </Animated.View>
 
-        {/* 6. DON'T FORGET (Reminders) */}
+        {/* REMINDERS / DON'T FORGET */}
         <SectionHeader
           title="Don't Forget"
           icon="bulb-outline"
@@ -511,7 +1085,7 @@ export function TodayScreen({ navigation }: { navigation: any }) {
           )}
         </Card>
 
-        {/* 7. LIFEOS SUGGESTION */}
+        {/* LIFEOS SUGGESTION */}
         <Animated.View entering={FadeInDown.delay(320).springify()}>
           <Card
             style={{
@@ -525,7 +1099,7 @@ export function TodayScreen({ navigation }: { navigation: any }) {
               <Label style={{ color: C.violet }}>LifeOS Suggestion</Label>
             </View>
             <Text style={{ color: C.text, fontSize: 14, lineHeight: 21 }}>
-              {money.spendingInsight} Protect your evening focus window for Digital Electronics revision.
+              {money.spendingInsight}
             </Text>
             <Btn
               title="Ask LifeOS anything"

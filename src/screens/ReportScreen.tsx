@@ -74,6 +74,119 @@ export function ReportScreen() {
           ))}
         </View>
 
+        {/* 2.5 FOCUS & HABITS REPORT SECTIONS */}
+        <SectionHeader title="Deep Focus" icon="flash-outline" right="This Week" />
+        <Animated.View entering={FadeInDown.delay(140).springify()}>
+          <Card>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: S.s }}>
+              <View style={{ flex: 1 }}>
+                <Label>Total Focus</Label>
+                <Text style={{ color: C.text, fontSize: 16, fontWeight: '800', marginTop: 4 }}>
+                  {stats.focusTotalThisWeek > 0 ? fmtDur(stats.focusTotalThisWeek) : 'Not enough data yet'}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Label>Avg Session</Label>
+                <Text style={{ color: C.text, fontSize: 16, fontWeight: '800', marginTop: 4 }}>
+                  {stats.focusAvgSession !== null ? fmtDur(stats.focusAvgSession) : 'Not enough data yet'}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Label>Top Project</Label>
+                <Text style={{ color: C.text, fontSize: 15, fontWeight: '800', marginTop: 4 }} numberOfLines={1}>
+                  {stats.topFocusedProjectName ?? 'Not enough data yet'}
+                </Text>
+              </View>
+            </View>
+          </Card>
+        </Animated.View>
+
+        {/* HABITS & TASKS BREAKDOWN */}
+        <View style={{ flexDirection: 'row', gap: S.m, marginTop: S.m }}>
+          {/* Habits Breakdown */}
+          <View style={{ flex: 1 }}>
+            <SectionHeader title="Habits" icon="repeat-outline" />
+            <Card style={{ flex: 1, padding: S.m }}>
+              <View style={{ gap: 8 }}>
+                <View>
+                  <Label>Completion Rate</Label>
+                  <Text style={{ color: C.text, fontSize: 16, fontWeight: '800', marginTop: 2 }}>
+                    {stats.habitsCompletionRate !== null ? `${stats.habitsCompletionRate}%` : 'Not enough data yet'}
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: C.border, paddingTop: 6 }}>
+                  <Text style={{ color: C.sub, fontSize: 12 }}>Current Streak</Text>
+                  <Text style={{ color: C.amber, fontSize: 12, fontWeight: '700' }}>
+                    {stats.habitsCurrentStreak}d
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ color: C.sub, fontSize: 12 }}>Best Streak</Text>
+                  <Text style={{ color: C.teal, fontSize: 12, fontWeight: '700' }}>
+                    {stats.habitsBestStreak}d
+                  </Text>
+                </View>
+              </View>
+            </Card>
+          </View>
+
+          {/* Tasks Breakdown */}
+          <View style={{ flex: 1 }}>
+            <SectionHeader title="Tasks" icon="checkbox-outline" />
+            <Card style={{ flex: 1, padding: S.m }}>
+              <View style={{ gap: 8 }}>
+                <View>
+                  <Label>Completion Rate</Label>
+                  <Text style={{ color: C.green, fontSize: 16, fontWeight: '800', marginTop: 2 }}>
+                    {stats.tasksCompletionRate}%
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: C.border, paddingTop: 6 }}>
+                  <Text style={{ color: C.sub, fontSize: 12 }}>Completed</Text>
+                  <Text style={{ color: C.text, fontSize: 12, fontWeight: '700' }}>
+                    {stats.tasksDone}/{stats.tasksTotal}
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ color: C.sub, fontSize: 12 }}>Overdue</Text>
+                  <Text style={{ color: stats.tasksOverdue > 0 ? C.pink : C.text, fontSize: 12, fontWeight: '700' }}>
+                    {stats.tasksOverdue}
+                  </Text>
+                </View>
+              </View>
+            </Card>
+          </View>
+        </View>
+
+        {/* TIME BREAKDOWN */}
+        <SectionHeader title="Time Balance" icon="time-outline" right="Today" />
+        <Animated.View entering={FadeInDown.delay(180).springify()}>
+          <Card>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <View style={{ alignItems: 'center', flex: 1 }}>
+                <Label>Planned</Label>
+                <Text style={{ color: C.blue, fontSize: 16, fontWeight: '800', marginTop: 3 }}>
+                  {fmtDur(stats.timePlannedMinutes)}
+                </Text>
+              </View>
+              <View style={{ width: 1, backgroundColor: C.border }} />
+              <View style={{ alignItems: 'center', flex: 1 }}>
+                <Label>Focused</Label>
+                <Text style={{ color: C.green, fontSize: 16, fontWeight: '800', marginTop: 3 }}>
+                  {fmtDur(stats.timeFocusedMinutes)}
+                </Text>
+              </View>
+              <View style={{ width: 1, backgroundColor: C.border }} />
+              <View style={{ alignItems: 'center', flex: 1 }}>
+                <Label>Available</Label>
+                <Text style={{ color: C.teal, fontSize: 16, fontWeight: '800', marginTop: 3 }}>
+                  {fmtDur(stats.timeAvailableMinutes)}
+                </Text>
+              </View>
+            </View>
+          </Card>
+        </Animated.View>
+
         {/* 3. IMPORTANT REMINDERS STATUS */}
         {stats.importantReminders.length > 0 ? (
           <Animated.View entering={FadeInDown.delay(240).springify()}>
@@ -102,28 +215,44 @@ export function ReportScreen() {
           </Animated.View>
         ) : null}
 
-        {/* 4. KEY INSIGHTS */}
+        {/* 4. PERSONAL INSIGHTS & PATTERNS */}
+        <SectionHeader title="Your Patterns" icon="sparkles-outline" right="Personal Insights" />
         <Animated.View entering={FadeInDown.delay(280).springify()}>
-          <Card style={{ marginTop: S.m, backgroundColor: alpha(C.violet, 0.08), borderColor: alpha(C.violet, 0.3) }}>
+          <Card style={{ backgroundColor: alpha(C.violet, 0.08), borderColor: alpha(C.violet, 0.3) }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.m }}>
               <Ionicons name="sparkles" size={15} color={C.violet} />
-              <Label style={{ color: C.violet }}>LifeOS Key Insights</Label>
+              <Label style={{ color: C.violet }}>Deterministic Pattern Detection</Label>
             </View>
-            {stats.insights.map((ins, i) => (
-              <View
-                key={i}
-                style={{
-                  flexDirection: 'row',
-                  gap: 10,
-                  paddingVertical: 8,
-                  borderTopWidth: i === 0 ? 0 : 1,
-                  borderTopColor: C.border,
-                }}
-              >
-                <Ionicons name={ins.icon as any} size={15} color={C.sub} style={{ marginTop: 2 }} />
-                <Text style={{ flex: 1, color: C.text, fontSize: 13, lineHeight: 19 }}>{ins.text}</Text>
-              </View>
-            ))}
+            {stats.personalInsights.length === 0 ? (
+              <Text style={{ color: C.sub, fontSize: 13 }}>
+                Not enough data yet. Complete more focus sessions, habits, and tasks to reveal your productivity patterns.
+              </Text>
+            ) : (
+              stats.personalInsights.map((ins, i) => (
+                <View
+                  key={ins.id}
+                  style={{
+                    paddingVertical: 10,
+                    borderTopWidth: i === 0 ? 0 : 1,
+                    borderTopColor: C.border,
+                    gap: 3,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={{ color: C.violet, fontSize: 11.5, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      {ins.category} · {ins.title}
+                    </Text>
+                    <Text style={{ color: C.faint, fontSize: 11 }}>{ins.timePeriod}</Text>
+                  </View>
+                  <Text style={{ color: C.text, fontSize: 13.5, fontWeight: '700', lineHeight: 19 }}>
+                    {ins.observation}
+                  </Text>
+                  <Text style={{ color: C.sub, fontSize: 12, lineHeight: 16 }}>
+                    {ins.factualBasis}
+                  </Text>
+                </View>
+              ))
+            )}
           </Card>
         </Animated.View>
 

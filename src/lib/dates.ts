@@ -63,6 +63,33 @@ export function startOfMonth(): Date {
   return d;
 }
 
+/**
+ * Returns a local date key in YYYY-MM-DD format based on the user's local timezone.
+ * Essential for midnight accuracy in habits and daily reviews.
+ */
+export function localDateKey(d: Date | number = new Date()): string {
+  const date = typeof d === 'number' ? new Date(d) : d;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function parseDateKey(key: string): Date {
+  const [y, m, d] = key.split('-').map((v) => parseInt(v, 10));
+  const date = new Date();
+  date.setFullYear(y, m - 1, d);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+export function shiftDateKey(key: string, daysOffset: number): string {
+  const date = parseDateKey(key);
+  date.setDate(date.getDate() + daysOffset);
+  return localDateKey(date);
+}
+
+
 export function isToday(ts: number): boolean {
   const d = new Date(ts);
   const n = new Date();

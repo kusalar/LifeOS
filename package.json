@@ -36,7 +36,8 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "test": "tsc tests/lifeos.test.ts --ignoreConfig --ignoreDeprecations 6.0 --target es2022 --module commonjs --moduleResolution node --skipLibCheck --outDir .test-dist --esModuleInterop && node .test-dist/tests/lifeos.test.js"
   },
   "private": true
 }

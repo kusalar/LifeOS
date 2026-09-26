@@ -46,13 +46,14 @@ const EXAMPLES = [
 
 export function PlannerScreen() {
   const { state, generateSchedule, toggleBlock, toggleTask } = useStore();
-  const { openTask } = useUI();
+  const { openTask, openFocusModal } = useUI();
   const [activeTab, setActiveTab] = useState<'tasks' | 'schedule'>('tasks');
   const [input, setInput] = useState(state?.scheduleInput ?? '');
   const [thinking, setThinking] = useState(false);
 
   const schedule = state?.schedule ?? [];
   const tasks = state?.tasks ?? [];
+  const projects = state?.projects ?? [];
 
   // Categorize tasks into Overdue, Today, Upcoming, Completed
   const taskGroups = useMemo(() => {
@@ -104,60 +105,87 @@ export function PlannerScreen() {
     .reduce((s, b) => s + (b.end - b.start), 0);
   const plannedMin = schedule.reduce((s, b) => s + (b.end - b.start), 0);
 
-  const renderTaskItem = (item: Task) => (
-    <Pressable
-      key={item.id}
-      onPress={() => openTask(item)}
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: S.m,
-        paddingVertical: 11,
-        borderBottomWidth: 1,
-        borderBottomColor: C.border,
-      }}
-    >
-      <CheckCircle
-        checked={item.done}
-        color={item.priority === 'critical' ? C.red : C.green}
-        onPress={() => toggleTask(item.id)}
-      />
-      <View style={{ flex: 1 }}>
-        <Text
-          style={{
-            color: item.done ? C.faint : C.text,
-            fontSize: 14.5,
-            fontWeight: '700',
-            textDecorationLine: item.done ? 'line-through' : 'none',
-          }}
-          numberOfLines={2}
-        >
-          {item.title}
-        </Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
-          <Text style={{ color: C.faint, fontSize: 11.5 }}>
-            {dueLabel(item.dueTs)}
+  const renderTaskItem = (item: Task) => {
+    const proj = item.projectId ? projects.find((p) => p.id === item.projectId) : null;
+    return (
+      <Pressable
+        key={item.id}
+        onPress={() => openTask(item)}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: S.m,
+          paddingVertical: 11,
+          borderBottomWidth: 1,
+          borderBottomColor: C.border,
+        }}
+      >
+        <CheckCircle
+          checked={item.done}
+          color={item.priority === 'critical' ? C.red : C.green}
+          onPress={() => toggleTask(item.id)}
+        />
+        <View style={{ flex: 1 }}>
+          <Text
+            style={{
+              color: item.done ? C.faint : C.text,
+              fontSize: 14.5,
+              fontWeight: '700',
+              textDecorationLine: item.done ? 'line-through' : 'none',
+            }}
+            numberOfLines={2}
+          >
+            {item.title}
           </Text>
-          {item.tag ? (
-            <>
-              <Text style={{ color: C.faint, fontSize: 10 }}>•</Text>
-              <Text style={{ color: C.sub, fontSize: 11.5 }}>{item.tag}</Text>
-            </>
-          ) : null}
-          {item.note ? (
-            <>
-              <Text style={{ color: C.faint, fontSize: 10 }}>•</Text>
-              <Text style={{ color: C.faint, fontSize: 11.5 }} numberOfLines={1}>
-                {item.note}
-              </Text>
-            </>
-          ) : null}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
+            <Text style={{ color: C.faint, fontSize: 11.5 }}>
+              {dueLabel(item.dueTs)}
+            </Text>
+            {item.tag ? (
+              <>
+                <Text style={{ color: C.faint, fontSize: 10 }}>•</Text>
+                <Text style={{ color: C.sub, fontSize: 11.5 }}>{item.tag}</Text>
+              </>
+            ) : null}
+            {proj ? (
+              <>
+                <Text style={{ color: C.faint, fontSize: 10 }}>•</Text>
+                <Text style={{ color: proj.color || C.blue, fontSize: 11.5, fontWeight: '700' }}>
+                  {proj.name}
+                </Text>
+              </>
+            ) : null}
+            {item.note ? (
+              <>
+                <Text style={{ color: C.faint, fontSize: 10 }}>•</Text>
+                <Text style={{ color: C.faint, fontSize: 11.5 }} numberOfLines={1}>
+                  {item.note}
+                </Text>
+              </>
+            ) : null}
+          </View>
         </View>
-      </View>
-      <PriorityBadge priority={item.priority} />
-      <Ionicons name="create-outline" size={16} color={C.faint} />
-    </Pressable>
-  );
+        <PriorityBadge priority={item.priority} />
+        {!item.done ? (
+          <Pressable
+            onPress={(e) => {
+              e.stopPropagation();
+              openFocusModal(item.id);
+            }}
+            hitSlop={8}
+            style={{
+              padding: 5,
+              borderRadius: 6,
+              backgroundColor: alpha(C.violet, 0.15),
+            }}
+          >
+            <Ionicons name="flash-outline" size={14} color={C.violet} />
+          </Pressable>
+        ) : null}
+        <Ionicons name="create-outline" size={16} color={C.faint} />
+      </Pressable>
+    );
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>

@@ -8,17 +8,23 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AskSheet } from './src/components/AskSheet';
 import { ExpenseSheet } from './src/components/ExpenseSheet';
+import { FocusModal } from './src/components/FocusModal';
+import { HabitSheet } from './src/components/HabitSheet';
+import { HabitsModal } from './src/components/HabitsModal';
 import { NowModal } from './src/components/NowModal';
+import { ProjectSheet } from './src/components/ProjectSheet';
 import { ReminderSheet } from './src/components/ReminderSheet';
+import { ReviewModal } from './src/components/ReviewModal';
 import { TabBar } from './src/components/TabBar';
 import { TaskSheet } from './src/components/TaskSheet';
 import { StoreProvider, UIContext, useStore } from './src/lib/store';
 import { MoneyScreen } from './src/screens/MoneyScreen';
 import { PlannerScreen } from './src/screens/PlannerScreen';
+import { ProjectsScreen } from './src/screens/ProjectsScreen';
 import { ReportScreen } from './src/screens/ReportScreen';
 import { TodayScreen } from './src/screens/TodayScreen';
 import { C } from './src/theme';
-import type { Task } from './src/types';
+import type { Habit, Project, Task } from './src/types';
 
 const Tab = createBottomTabNavigator();
 
@@ -65,17 +71,50 @@ function Root() {
   const [expOpen, setExpOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
+  const [defaultTaskProjId, setDefaultTaskProjId] = useState<string | undefined>(undefined);
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [projectToEdit, setProjectToEdit] = useState<Project | null>(null);
   const [remOpen, setRemOpen] = useState(false);
   const [nowOpen, setNowOpen] = useState(false);
+
+  // V1.1 Focus, Habits, and Review modal states
+  const [focusOpen, setFocusOpen] = useState(false);
+  const [focusTaskId, setFocusTaskId] = useState<string | undefined>(undefined);
+  const [habitOpen, setHabitOpen] = useState(false);
+  const [habitToEdit, setHabitToEdit] = useState<Habit | null>(null);
+  const [habitsModalOpen, setHabitsModalOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewDateKey, setReviewDateKey] = useState<string | undefined>(undefined);
 
   // Preload icon fonts for web
   const [fontsLoaded] = useFonts({ ...Ionicons.font });
 
   if (!fontsLoaded || !ready) return <Splash />;
 
-  const handleOpenTask = (task?: Task) => {
+  const handleOpenTask = (task?: Task, defaultProjectId?: string) => {
     setTaskToEdit(task || null);
+    setDefaultTaskProjId(defaultProjectId);
     setTaskOpen(true);
+  };
+
+  const handleOpenProject = (project?: Project) => {
+    setProjectToEdit(project || null);
+    setProjectOpen(true);
+  };
+
+  const handleOpenFocus = (taskId?: string) => {
+    setFocusTaskId(taskId);
+    setFocusOpen(true);
+  };
+
+  const handleOpenHabit = (habit?: Habit) => {
+    setHabitToEdit(habit || null);
+    setHabitOpen(true);
+  };
+
+  const handleOpenReview = (dateKey?: string) => {
+    setReviewDateKey(dateKey);
+    setReviewOpen(true);
   };
 
   return (
@@ -86,6 +125,11 @@ function Root() {
         openTask: handleOpenTask,
         openReminder: () => setRemOpen(true),
         openNowModal: () => setNowOpen(true),
+        openProject: handleOpenProject,
+        openFocusModal: handleOpenFocus,
+        openHabitSheet: handleOpenHabit,
+        openReviewModal: handleOpenReview,
+        openHabitsModal: () => setHabitsModalOpen(true),
       }}
     >
       <SafeAreaProvider>
@@ -93,12 +137,13 @@ function Root() {
           <Tab.Navigator tabBar={(props) => <TabBar {...props} />} screenOptions={{ headerShown: false }}>
             <Tab.Screen name="Today" component={TodayScreen} />
             <Tab.Screen name="Plan" component={PlannerScreen} />
+            <Tab.Screen name="Projects" component={ProjectsScreen} />
             <Tab.Screen name="Money" component={MoneyScreen} />
             <Tab.Screen name="Report" component={ReportScreen} />
           </Tab.Navigator>
         </NavigationContainer>
 
-        {/* Global Modal Sheets */}
+        {/* Global Modal Sheets & Operating System Views */}
         <AskSheet visible={askOpen} onClose={() => setAskOpen(false)} />
         <ExpenseSheet visible={expOpen} onClose={() => setExpOpen(false)} />
         <TaskSheet
@@ -106,11 +151,47 @@ function Root() {
           onClose={() => {
             setTaskOpen(false);
             setTaskToEdit(null);
+            setDefaultTaskProjId(undefined);
           }}
           initialTask={taskToEdit}
+          defaultProjectId={defaultTaskProjId}
+        />
+        <ProjectSheet
+          visible={projectOpen}
+          onClose={() => {
+            setProjectOpen(false);
+            setProjectToEdit(null);
+          }}
+          initialProject={projectToEdit}
         />
         <ReminderSheet visible={remOpen} onClose={() => setRemOpen(false)} />
         <NowModal visible={nowOpen} onClose={() => setNowOpen(false)} />
+
+        <FocusModal
+          visible={focusOpen}
+          taskId={focusTaskId}
+          onClose={() => {
+            setFocusOpen(false);
+            setFocusTaskId(undefined);
+          }}
+        />
+        <HabitSheet
+          visible={habitOpen}
+          initialHabit={habitToEdit}
+          onClose={() => {
+            setHabitOpen(false);
+            setHabitToEdit(null);
+          }}
+        />
+        <HabitsModal visible={habitsModalOpen} onClose={() => setHabitsModalOpen(false)} />
+        <ReviewModal
+          visible={reviewOpen}
+          dateKey={reviewDateKey}
+          onClose={() => {
+            setReviewOpen(false);
+            setReviewDateKey(undefined);
+          }}
+        />
 
         <StatusBar style="light" />
       </SafeAreaProvider>

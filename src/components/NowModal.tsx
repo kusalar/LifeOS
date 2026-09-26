@@ -25,13 +25,27 @@ export function NowModal({
   onNavigatePlan?: () => void;
   onNavigateTasks?: () => void;
 }) {
-  const { state, toggleTask, toggleBlock } = useStore();
+  const { state, toggleTask, toggleBlock, startTask, stopActiveTask } = useStore();
 
   const rec = useMemo(() => (state ? getWhatToDoNow(state) : null), [state, visible]);
 
   if (!state || !rec) return null;
 
-  const handleAction = () => {
+  const isTask = !!rec.taskId;
+  const isBlock = !!rec.blockId;
+  const isStarted = !!rec.isStarted;
+
+  const handleStart = () => {
+    if (rec.taskId) {
+      startTask(rec.taskId);
+    }
+  };
+
+  const handleStop = () => {
+    stopActiveTask();
+  };
+
+  const handleComplete = () => {
     if (rec.taskId) {
       toggleTask(rec.taskId);
       onClose();
@@ -42,9 +56,6 @@ export function NowModal({
       onClose();
     }
   };
-
-  const isTask = !!rec.taskId;
-  const isBlock = !!rec.blockId;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -84,7 +95,7 @@ export function NowModal({
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ color: C.text, fontWeight: '800', fontSize: 18 }}>What Should I Do Now?</Text>
-              <Text style={{ color: C.faint, fontSize: 12 }}>Evaluated against deadlines, schedule & priorities</Text>
+              <Text style={{ color: C.faint, fontSize: 12 }}>Evaluated against deadlines, projects & schedule</Text>
             </View>
             <Pressable onPress={onClose} hitSlop={10}>
               <Ionicons name="close" size={22} color={C.sub} />
@@ -97,13 +108,13 @@ export function NowModal({
               style={{
                 backgroundColor: C.surface2,
                 borderRadius: R.xl,
-                borderWidth: 1,
-                borderColor: alpha(rec.tagColor, 0.4),
+                borderWidth: 1.5,
+                borderColor: alpha(rec.tagColor, 0.45),
                 padding: S.l,
                 marginBottom: S.m,
               }}
             >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.s }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.s, flexWrap: 'wrap' }}>
                 <View
                   style={{
                     borderRadius: R.pill,
@@ -118,6 +129,49 @@ export function NowModal({
                     {rec.category.toUpperCase()}
                   </Text>
                 </View>
+
+                {rec.projectName ? (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 4,
+                      borderRadius: R.pill,
+                      backgroundColor: alpha(C.blue, 0.16),
+                      borderWidth: 1,
+                      borderColor: alpha(C.blue, 0.35),
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                    }}
+                  >
+                    <Ionicons name="folder-outline" size={12} color={C.blue} />
+                    <Text style={{ color: C.blue, fontSize: 11, fontWeight: '700' }}>
+                      {rec.projectName}
+                    </Text>
+                  </View>
+                ) : null}
+
+                {isStarted ? (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 4,
+                      borderRadius: R.pill,
+                      backgroundColor: alpha(C.green, 0.18),
+                      borderWidth: 1,
+                      borderColor: alpha(C.green, 0.4),
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                    }}
+                  >
+                    <Ionicons name="play" size={11} color={C.green} />
+                    <Text style={{ color: C.green, fontSize: 11, fontWeight: '800' }}>
+                      IN PROGRESS
+                    </Text>
+                  </View>
+                ) : null}
+
                 <View style={{ flex: 1 }} />
                 <Text style={{ color: C.faint, fontSize: 11.5, fontWeight: '700' }}>
                   Confidence: {rec.confidence}
@@ -127,6 +181,27 @@ export function NowModal({
               <Text style={{ color: C.text, fontSize: 20, fontWeight: '800', marginVertical: 4 }}>
                 {rec.actionTitle}
               </Text>
+
+              {/* Structured Explanation Lines */}
+              {rec.explanationLines && rec.explanationLines.length > 0 ? (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 6 }}>
+                  {rec.explanationLines.map((line, idx) => (
+                    <View
+                      key={idx}
+                      style={{
+                        borderRadius: R.pill,
+                        backgroundColor: alpha(C.text, 0.06),
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                      }}
+                    >
+                      <Text style={{ color: C.sub, fontSize: 11.5, fontWeight: '600' }}>
+                        • {line}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
 
               <Text style={{ color: C.sub, fontSize: 13.5, lineHeight: 20, marginTop: 4 }}>
                 {rec.reason}
@@ -154,13 +229,48 @@ export function NowModal({
 
             {/* Quick action buttons */}
             <View style={{ gap: 8, marginTop: 4 }}>
-              {isTask || isBlock ? (
+              {isTask && !isStarted ? (
                 <Btn
-                  title={isTask ? 'Mark Task Complete' : 'Mark Schedule Block Done'}
-                  icon="checkmark-circle-outline"
-                  onPress={handleAction}
+                  title="Start Focused Session"
+                  icon="play"
+                  variant="primary"
+                  onPress={handleStart}
                 />
               ) : null}
+
+              {isTask && isStarted ? (
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Btn
+                    title="Mark Complete"
+                    icon="checkmark-circle"
+                    variant="primary"
+                    onPress={handleComplete}
+                    style={{ flex: 2 }}
+                  />
+                  <Btn
+                    title="Pause"
+                    icon="pause"
+                    variant="ghost"
+                    onPress={handleStop}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              ) : isTask ? (
+                <Btn
+                  title="Mark Task Complete"
+                  icon="checkmark-circle-outline"
+                  variant="ghost"
+                  onPress={handleComplete}
+                />
+              ) : isBlock ? (
+                <Btn
+                  title="Mark Schedule Block Done"
+                  icon="checkmark-circle-outline"
+                  variant="primary"
+                  onPress={handleComplete}
+                />
+              ) : null}
+
               <Btn
                 title="Got it"
                 variant="ghost"

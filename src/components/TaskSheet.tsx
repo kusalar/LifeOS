@@ -12,31 +12,39 @@ import {
 } from 'react-native';
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { addDays, atTime, dueLabel, fmtDateShort, fmtTime } from '../lib/dates';
-import { useStore } from '../lib/store';
+import { useStore, useUI } from '../lib/store';
 import type { Priority, Task } from '../types';
 import { alpha, C, R, S } from '../theme';
 import { Btn, PriorityBadge } from './ui';
 
 const PRIORITIES: Priority[] = ['critical', 'important', 'normal'];
 const TAGS = ['College', 'Exam', 'Academic', 'Work', 'Errand', 'Habit', 'Personal'];
+const DURATIONS = [15, 30, 45, 60, 90, 120];
 
 export function TaskSheet({
   visible,
   onClose,
   initialTask,
+  defaultProjectId,
 }: {
   visible: boolean;
   onClose: () => void;
   initialTask?: Task | null;
+  defaultProjectId?: string;
 }) {
-  const { addTask, updateTask, deleteTask } = useStore();
+  const { state, addTask, updateTask, deleteTask } = useStore();
+  const { openFocusModal } = useUI();
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<Priority>('important');
   const [dueDaysOffset, setDueDaysOffset] = useState<number>(0);
   const [dueHour, setDueHour] = useState<number>(18); // 6:00 PM default
   const [tag, setTag] = useState('College');
+  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+  const [estimatedMinutes, setEstimatedMinutes] = useState<number | undefined>(45);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+
+  const projects = state?.projects ?? [];
 
   useEffect(() => {
     if (visible) {
@@ -44,6 +52,8 @@ export function TaskSheet({
         setTitle(initialTask.title);
         setPriority(initialTask.priority);
         setTag(initialTask.tag || 'College');
+        setProjectId(initialTask.projectId);
+        setEstimatedMinutes(initialTask.estimatedMinutes || 45);
         setNote(initialTask.note || '');
         setError('');
       } else {
@@ -52,11 +62,13 @@ export function TaskSheet({
         setDueDaysOffset(0);
         setDueHour(18);
         setTag('College');
+        setProjectId(defaultProjectId);
+        setEstimatedMinutes(45);
         setNote('');
         setError('');
       }
     }
-  }, [visible, initialTask]);
+  }, [visible, initialTask, defaultProjectId]);
 
   const save = () => {
     if (!title.trim()) {
@@ -72,6 +84,8 @@ export function TaskSheet({
         priority,
         tag,
         dueTs,
+        projectId,
+        estimatedMinutes,
         note: note.trim() || undefined,
       });
     } else {
@@ -80,6 +94,8 @@ export function TaskSheet({
         priority,
         dueTs,
         tag,
+        projectId,
+        estimatedMinutes,
         note: note.trim() || undefined,
       });
     }
@@ -110,7 +126,7 @@ export function TaskSheet({
             borderColor: C.border2,
             padding: S.l,
             paddingBottom: Platform.OS === 'ios' ? 36 : 26,
-            maxHeight: '90%',
+            maxHeight: '92%',
           }}
         >
           <View style={{ alignItems: 'center', marginBottom: 12 }}>
@@ -134,7 +150,7 @@ export function TaskSheet({
               <Text style={{ color: C.text, fontWeight: '800', fontSize: 18 }}>
                 {initialTask ? 'Edit Task' : 'Add New Task'}
               </Text>
-              <Text style={{ color: C.faint, fontSize: 12 }}>Set priority, due date & category</Text>
+              <Text style={{ color: C.faint, fontSize: 12 }}>Set project, priority, duration & due date</Text>
             </View>
             <Pressable onPress={onClose} hitSlop={10}>
               <Ionicons name="close" size={22} color={C.sub} />
@@ -144,7 +160,7 @@ export function TaskSheet({
           <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             {/* Title */}
             <Text style={{ color: C.sub, fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: 6 }}>
-              TASK TITLE
+              TASK TITLE *
             </Text>
             <TextInput
               value={title}
@@ -170,6 +186,71 @@ export function TaskSheet({
             />
             {error ? (
               <Text style={{ color: C.red, fontSize: 12, fontWeight: '600', marginBottom: S.m }}>{error}</Text>
+            ) : null}
+
+            {/* Project Selection */}
+            {projects.length > 0 ? (
+              <>
+                <Text style={{ color: C.sub, fontSize: 11, fontWeight: '700', letterSpacing: 1, marginTop: 4, marginBottom: 8 }}>
+                  PROJECT (OPTIONAL)
+                </Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: S.m }}>
+                  <Pressable
+                    onPress={() => setProjectId(undefined)}
+                    style={{
+                      borderRadius: R.pill,
+                      backgroundColor: projectId === undefined ? alpha(C.amber, 0.16) : C.surface2,
+                      borderWidth: 1,
+                      borderColor: projectId === undefined ? alpha(C.amber, 0.5) : C.border,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: projectId === undefined ? C.amber : C.sub,
+                        fontSize: 12,
+                        fontWeight: projectId === undefined ? '800' : '600',
+                      }}
+                    >
+                      Standalone (No Project)
+                    </Text>
+                  </Pressable>
+
+                  {projects.map((p) => {
+                    const active = projectId === p.id;
+                    const col = p.color || C.blue;
+                    return (
+                      <Pressable
+                        key={p.id}
+                        onPress={() => setProjectId(p.id)}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 6,
+                          borderRadius: R.pill,
+                          backgroundColor: active ? alpha(col, 0.2) : C.surface2,
+                          borderWidth: 1,
+                          borderColor: active ? col : C.border,
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                        }}
+                      >
+                        <Ionicons name={(p.icon as any) || 'folder-outline'} size={13} color={active ? col : C.faint} />
+                        <Text
+                          style={{
+                            color: active ? col : C.sub,
+                            fontSize: 12,
+                            fontWeight: active ? '800' : '600',
+                          }}
+                        >
+                          {p.name}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
             ) : null}
 
             {/* Priority */}
@@ -220,6 +301,40 @@ export function TaskSheet({
               })}
             </View>
 
+            {/* Estimated Duration */}
+            <Text style={{ color: C.sub, fontSize: 11, fontWeight: '700', letterSpacing: 1, marginTop: 4, marginBottom: 8 }}>
+              ESTIMATED DURATION
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: S.m }}>
+              {DURATIONS.map((dur) => {
+                const active = estimatedMinutes === dur;
+                return (
+                  <Pressable
+                    key={dur}
+                    onPress={() => setEstimatedMinutes(dur)}
+                    style={{
+                      borderRadius: R.pill,
+                      backgroundColor: active ? alpha(C.teal, 0.18) : C.surface2,
+                      borderWidth: 1,
+                      borderColor: active ? alpha(C.teal, 0.5) : C.border,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: active ? C.teal : C.sub,
+                        fontSize: 12,
+                        fontWeight: active ? '800' : '600',
+                      }}
+                    >
+                      {dur < 60 ? `${dur}m` : `${dur / 60}h`}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
             {/* Due Date Shortcut Chips */}
             <Text style={{ color: C.sub, fontSize: 11, fontWeight: '700', letterSpacing: 1, marginTop: 4, marginBottom: 8 }}>
               DUE DATE
@@ -262,7 +377,7 @@ export function TaskSheet({
 
             {/* Tag Selection */}
             <Text style={{ color: C.sub, fontSize: 11, fontWeight: '700', letterSpacing: 1, marginTop: 4, marginBottom: 8 }}>
-              TAG
+              CATEGORY TAG
             </Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: S.m }}>
               {TAGS.map((t) => {
@@ -316,22 +431,38 @@ export function TaskSheet({
               }}
             />
 
-            <View style={{ flexDirection: 'row', gap: 10 }}>
+            <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
+              {initialTask && !initialTask.done ? (
+                <Btn
+                  variant="primary"
+                  icon="flash-outline"
+                  onPress={() => {
+                    save();
+                    openFocusModal(initialTask.id);
+                  }}
+                  style={{ width: '100%', backgroundColor: C.violet, marginBottom: 4 }}
+                >
+                  START FOCUS
+                </Btn>
+              ) : null}
               {initialTask ? (
                 <Btn
-                  title="Delete"
                   variant="danger"
                   icon="trash-outline"
                   onPress={handleDelete}
                   style={{ flex: 1 }}
-                />
+                >
+                  Delete
+                </Btn>
               ) : null}
               <Btn
-                title={initialTask ? 'Save Changes' : 'Create Task'}
+                variant="primary"
                 icon="checkmark"
                 onPress={save}
                 style={{ flex: 2 }}
-              />
+              >
+                {initialTask ? 'Save Changes' : 'Create Task'}
+              </Btn>
             </View>
           </ScrollView>
         </Animated.View>

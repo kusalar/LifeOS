@@ -540,5 +540,6 @@ export function makeSeed(): AppState {
         location: 'VLSI Lab 302',
       },
     ],
+    onboardingCompleted: true,
   };
 }

@@ -21,6 +21,7 @@ import { RescheduleModal } from './src/components/RescheduleModal';
 import { ReviewModal } from './src/components/ReviewModal';
 import { TabBar } from './src/components/TabBar';
 import { TaskSheet } from './src/components/TaskSheet';
+import { OnboardingModal } from './src/components/OnboardingModal';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { StoreProvider, UIContext, useStore } from './src/lib/store';
 import { MoneyScreen } from './src/screens/MoneyScreen';
@@ -71,7 +72,7 @@ function Splash() {
 }
 
 function Root() {
-  const { ready } = useStore();
+  const { state, ready, completeOnboarding } = useStore();
   const [askOpen, setAskOpen] = useState(false);
   const [expOpen, setExpOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
@@ -236,6 +237,11 @@ function Root() {
             setRescheduleOpen(false);
             setRescheduleProposal(null);
           }}
+        />
+
+        <OnboardingModal
+          visible={state ? !state.onboardingCompleted : false}
+          onComplete={completeOnboarding}
         />
 
         <StatusBar style="light" />

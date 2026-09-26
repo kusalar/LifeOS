@@ -233,5 +233,6 @@ export function repairSafeDefaults(raw: any): AppState {
       importedEventCount: 0,
     },
     externalCalendarEvents: Array.isArray(raw.externalCalendarEvents) ? raw.externalCalendarEvents : [],
+    onboardingCompleted: typeof raw.onboardingCompleted === 'boolean' ? raw.onboardingCompleted : true,
   };
 }

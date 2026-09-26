@@ -130,6 +130,15 @@ interface StoreCtx {
   reconcileAllNotifications: () => Promise<NotificationReconciliationResult>;
   reconcileExternalCalendar: (incomingEvents?: ExternalCalendarEvent[]) => Promise<CalendarReconciliationResult>;
   clearCorruptedNotice: () => void;
+  sendTestNotification: () => Promise<string>;
+  completeOnboarding: (setupData?: {
+    workDayStart?: number;
+    workDayEnd?: number;
+    deepWorkStart?: number;
+    deepWorkEnd?: number;
+    notificationsEnabled?: boolean;
+    calendarEnabled?: boolean;
+  }) => void;
 }
 
 const Ctx = createContext<StoreCtx>({
@@ -192,6 +201,8 @@ const Ctx = createContext<StoreCtx>({
   reconcileAllNotifications: async () => ({ scheduledCount: 0, cancelledCount: 0, preservedCount: 0, scheduledIds: [], cancelledIds: [], preservedIds: [] }),
   reconcileExternalCalendar: async () => ({ presentCount: 0, updatedCount: 0, removedCount: 0, presentIds: [], updatedIds: [], removedIds: [] }),
   clearCorruptedNotice: () => {},
+  sendTestNotification: async () => '',
+  completeOnboarding: () => {},
 });
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
@@ -1086,6 +1097,38 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       clearCorruptedNotice: () => {
         clearCorruptedPayload();
         setState((s) => (s ? { ...s, corruptedPayloadDetected: false } : s));
+      },
+      sendTestNotification: async () => {
+        const notifId = await localNotificationService.sendTestNotification();
+        const testNotif = (await localNotificationService.getScheduled()).find((n) => n.id === notifId);
+        if (testNotif) {
+          setState((s) => (s ? { ...s, localNotifications: [testNotif, ...(s.localNotifications || [])] } : s));
+        }
+        return notifId;
+      },
+      completeOnboarding: (setupData) => {
+        setState((s) => {
+          if (!s) return s;
+          const updated: AppState = {
+            ...s,
+            onboardingCompleted: true,
+          };
+          if (setupData?.workDayStart !== undefined) updated.workDayStart = setupData.workDayStart;
+          if (setupData?.workDayEnd !== undefined) updated.workDayEnd = setupData.workDayEnd;
+          if (setupData?.deepWorkStart !== undefined && setupData?.deepWorkEnd !== undefined) {
+            updated.planningPreferences = {
+              ...(updated.planningPreferences || {}),
+              deepWorkWindow: { start: setupData.deepWorkStart, end: setupData.deepWorkEnd },
+            };
+          }
+          if (setupData?.notificationsEnabled !== undefined) {
+            updated.notificationPreferences = {
+              ...(updated.notificationPreferences || DEFAULT_NOTIFICATION_PREFERENCES),
+              enabled: setupData.notificationsEnabled,
+            };
+          }
+          return updated;
+        });
       },
     }),
     [state, ready]

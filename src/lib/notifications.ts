@@ -4,6 +4,40 @@ import type {
   NotificationReconciliationResult,
 } from '../types';
 
+export interface NotificationChannelConfig {
+  id: string;
+  name: string;
+  description: string;
+  importance: 'default' | 'high' | 'low';
+}
+
+export const ANDROID_NOTIFICATION_CHANNELS: NotificationChannelConfig[] = [
+  {
+    id: 'lifeos-reminders',
+    name: 'LifeOS Reminders',
+    description: 'Alerts at planned times or task reminders',
+    importance: 'high',
+  },
+  {
+    id: 'lifeos-deadlines',
+    name: 'LifeOS Deadlines',
+    description: 'Advance warnings for approaching due dates and project milestones',
+    importance: 'high',
+  },
+  {
+    id: 'lifeos-routines',
+    name: 'LifeOS Routines',
+    description: 'Prompts for morning launch and evening reflection routines',
+    importance: 'default',
+  },
+  {
+    id: 'lifeos-weekly-review',
+    name: 'LifeOS Weekly Review',
+    description: 'Sunday evening weekly review and reflection reminder',
+    importance: 'default',
+  },
+];
+
 export interface NotificationService {
   requestPermission(): Promise<boolean>;
   schedule(notification: LocalNotification): Promise<string>;
@@ -11,6 +45,7 @@ export interface NotificationService {
   cancelAll(): Promise<void>;
   getScheduled(): Promise<LocalNotification[]>;
   hasPermission(): Promise<boolean>;
+  sendTestNotification(): Promise<string>;
   reconcile?(desired: LocalNotification[]): Promise<NotificationReconciliationResult>;
 }
 
@@ -101,6 +136,7 @@ export function reconcileNotifications(
 export class SafeLocalNotificationService implements NotificationService {
   private permissionGranted: boolean = true;
   private scheduledStore: Map<string, LocalNotification> = new Map();
+  private channelsCreated: boolean = false;
 
   async requestPermission(): Promise<boolean> {
     // If permission was explicitly revoked, maintain it; otherwise default true
@@ -113,6 +149,14 @@ export class SafeLocalNotificationService implements NotificationService {
 
   setPermission(granted: boolean): void {
     this.permissionGranted = granted;
+  }
+
+  async initChannels(): Promise<void> {
+    this.channelsCreated = true;
+  }
+
+  hasChannelsCreated(): boolean {
+    return this.channelsCreated;
   }
 
   async schedule(notification: LocalNotification): Promise<string> {
@@ -151,6 +195,24 @@ export class SafeLocalNotificationService implements NotificationService {
     return Array.from(this.scheduledStore.values()).filter((n) => n.status === 'scheduled');
   }
 
+  async sendTestNotification(): Promise<string> {
+    if (!this.permissionGranted) {
+      throw new Error('Notification permission denied by device.');
+    }
+    const id = `lifeos-test-notif-${Date.now()}`;
+    const testNotif: LocalNotification = {
+      id,
+      title: 'LifeOS Test',
+      body: 'Local notifications are working.',
+      scheduledAt: Date.now() + 1000,
+      type: 'reminder',
+      status: 'scheduled',
+      createdAt: Date.now(),
+    };
+    this.scheduledStore.set(id, testNotif);
+    return id;
+  }
+
   async reconcile(desired: LocalNotification[]): Promise<NotificationReconciliationResult> {
     const scheduled = await this.getScheduled();
     const result = reconcileNotifications(desired, scheduled);
@@ -173,4 +235,3 @@ export class SafeLocalNotificationService implements NotificationService {
 
 export const localNotificationService: SafeLocalNotificationService =
   new SafeLocalNotificationService();
-

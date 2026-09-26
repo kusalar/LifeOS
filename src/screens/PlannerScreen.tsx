@@ -62,6 +62,7 @@ export function PlannerScreen() {
     reconcileAllNotifications,
     reconcileExternalCalendar,
     clearCorruptedNotice,
+    sendTestNotification,
   } = useStore();
   const { openTask, openFocusModal, openBreakdownModal } = useUI();
   const [activeTab, setActiveTab] = useState<'tasks' | 'schedule' | 'weekly' | 'settings'>('tasks');
@@ -72,6 +73,7 @@ export function PlannerScreen() {
   const [integrityCheckResult, setIntegrityCheckResult] = useState<string | null>(null);
   const [notifReconcileResult, setNotifReconcileResult] = useState<string | null>(null);
   const [calReconcileResult, setCalReconcileResult] = useState<string | null>(null);
+  const [testNotifFeedback, setTestNotifFeedback] = useState<string | null>(null);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -721,6 +723,39 @@ export function PlannerScreen() {
                 Deterministic integrity verification, safe notification reconciliation, and local state repair.
               </Text>
 
+              {/* Factual Data Summary (V6) */}
+              <View style={{ marginBottom: S.m, padding: 12, borderRadius: R.m, backgroundColor: C.surface2 }}>
+                <Text style={{ color: C.faint, fontSize: 10, fontWeight: '800', letterSpacing: 0.5, marginBottom: 8 }}>
+                  LOCAL DATA INVENTORY
+                </Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                  <Text style={{ color: C.text, fontSize: 12 }}>
+                    <Text style={{ fontWeight: '800', color: C.amber }}>{(state?.tasks ?? []).length}</Text> Tasks
+                  </Text>
+                  <Text style={{ color: C.text, fontSize: 12 }}>
+                    <Text style={{ fontWeight: '800', color: C.blue }}>{(state?.projects ?? []).length}</Text> Projects
+                  </Text>
+                  <Text style={{ color: C.text, fontSize: 12 }}>
+                    <Text style={{ fontWeight: '800', color: C.violet }}>{(state?.goals ?? []).length}</Text> Goals
+                  </Text>
+                  <Text style={{ color: C.text, fontSize: 12 }}>
+                    <Text style={{ fontWeight: '800', color: C.green }}>{(state?.habits ?? []).length}</Text> Habits
+                  </Text>
+                  <Text style={{ color: C.text, fontSize: 12 }}>
+                    <Text style={{ fontWeight: '800', color: C.teal }}>{(state?.routines ?? []).length}</Text> Routines
+                  </Text>
+                  <Text style={{ color: C.text, fontSize: 12 }}>
+                    <Text style={{ fontWeight: '800', color: C.amber }}>{(state?.focusSessions ?? []).length}</Text> Focus Sessions
+                  </Text>
+                  <Text style={{ color: C.text, fontSize: 12 }}>
+                    <Text style={{ fontWeight: '800', color: C.sub }}>{(state?.decisionRecords ?? []).length}</Text> Decision Records
+                  </Text>
+                  <Text style={{ color: C.text, fontSize: 12 }}>
+                    <Text style={{ fontWeight: '800', color: C.teal }}>{(state?.externalCalendarEvents ?? []).length}</Text> Calendar Events
+                  </Text>
+                </View>
+              </View>
+
               <View style={{ gap: 10 }}>
                 {/* Check Data */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1025,6 +1060,47 @@ export function PlannerScreen() {
                   Non-urgent notifications scheduled during quiet hours are delayed until morning.
                 </Text>
               </View>
+
+              {/* Test Notification Action */}
+              <View style={{ marginTop: S.m, paddingTop: S.m, borderTopWidth: 1, borderColor: C.border }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }}>Native Test Notification</Text>
+                    <Text style={{ color: C.faint, fontSize: 11 }}>Verify native notification delivery on real device</Text>
+                  </View>
+                  <Btn
+                    title="Send Test"
+                    variant="secondary"
+                    size="small"
+                    icon="paper-plane-outline"
+                    onPress={async () => {
+                      try {
+                        const notifId = await sendTestNotification();
+                        setTestNotifFeedback(`Test scheduled (${notifId})`);
+                      } catch (err: any) {
+                        setTestNotifFeedback(err?.message || 'Failed to dispatch test notification');
+                      }
+                    }}
+                    accessibilityLabel="Send test notification to verify device behavior"
+                  />
+                </View>
+                {testNotifFeedback ? (
+                  <Text style={{ color: testNotifFeedback.includes('scheduled') ? C.green : C.red, fontSize: 11, fontWeight: '700', marginTop: 4 }}>
+                    {testNotifFeedback}
+                  </Text>
+                ) : null}
+              </View>
+
+              {/* Android Battery Optimization Guidance */}
+              <View style={{ marginTop: S.m, padding: 10, borderRadius: R.m, backgroundColor: C.surface2 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                  <Ionicons name="battery-charging-outline" size={14} color={C.amber} />
+                  <Text style={{ color: C.text, fontSize: 11, fontWeight: '800' }}>Android Battery Optimization</Text>
+                </View>
+                <Text style={{ color: C.sub, fontSize: 11, lineHeight: 16 }}>
+                  Background notifications may be delayed by aggressive battery optimization on some Android devices. LifeOS continues planning reminders locally, but Android may restrict background delivery unless unrestricted battery is selected.
+                </Text>
+              </View>
             </Card>
 
             {/* 3. CALENDAR INTEGRATION */}
@@ -1280,6 +1356,46 @@ export function PlannerScreen() {
                 </View>
               </Card>
             ) : null}
+
+            {/* 6. ABOUT & RELEASE INFORMATION */}
+            <Card style={{ marginBottom: S.l, borderColor: alpha(C.amber, 0.25) }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.m }}>
+                <Ionicons name="information-circle-outline" size={18} color={C.amber} />
+                <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>About LifeOS</Text>
+              </View>
+
+              <View style={{ gap: 8 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Application</Text>
+                  <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }}>LifeOS</Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Version</Text>
+                  <Text style={{ color: C.amber, fontSize: 13, fontWeight: '700' }}>1.0.0 (V6)</Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Data Schema</Text>
+                  <Text style={{ color: C.blue, fontSize: 13, fontWeight: '700' }}>V5 (lifeos-state-v2)</Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Architecture</Text>
+                  <Text style={{ color: C.text, fontSize: 13 }}>Local-first / Offline</Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Intelligence</Text>
+                  <Text style={{ color: C.text, fontSize: 13 }}>Deterministic Rules Engine</Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Remote Telemetry</Text>
+                  <Text style={{ color: C.green, fontSize: 13, fontWeight: '700' }}>Zero (None)</Text>
+                </View>
+              </View>
+            </Card>
           </ScrollView>
         )}
 

@@ -2,6 +2,7 @@ import type { ExternalCalendar, ExternalCalendarEvent } from '../types';
 
 export interface CalendarProvider {
   requestPermission(): Promise<boolean>;
+  hasPermission(): Promise<boolean>;
   getCalendars(): Promise<ExternalCalendar[]>;
   getEvents(start: number, end: number): Promise<ExternalCalendarEvent[]>;
 }
@@ -56,6 +57,10 @@ export class SafeLocalCalendarProvider implements CalendarProvider {
   }
 
   async requestPermission(): Promise<boolean> {
+    return this.permissionGranted;
+  }
+
+  async hasPermission(): Promise<boolean> {
     return this.permissionGranted;
   }
 

@@ -404,6 +404,7 @@ export interface AppState {
   lastIntegrityCheck?: ValidationResultSummary | null;
   dataVersion?: string;
   corruptedPayloadDetected?: boolean;
+  onboardingCompleted?: boolean;
 }
 
 export interface AskLine {

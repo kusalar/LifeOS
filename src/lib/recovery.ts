@@ -159,6 +159,7 @@ export function resolveRecoveredFocus(
     return {
       updatedState: {
         ...state,
+        recoveredFocus: null,
         activeTaskStartedAt: Date.now(),
         activeTaskPausedAt: null,
       },
@@ -170,6 +171,7 @@ export function resolveRecoveredFocus(
     return {
       updatedState: {
         ...state,
+        recoveredFocus: null,
         activeTaskId: null,
         activeTaskStartedAt: null,
         activeTaskPausedAt: null,
@@ -196,6 +198,7 @@ export function resolveRecoveredFocus(
   return {
     updatedState: {
       ...state,
+      recoveredFocus: null,
       tasks: updatedTasks,
       focusSessions: [...(state.focusSessions ?? []), session],
       activeTaskId: null,

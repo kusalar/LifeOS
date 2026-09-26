@@ -226,6 +226,8 @@ export function Btn({
   loading,
   style,
   compact,
+  accessibilityLabel,
+  accessibilityHint,
 }: {
   title?: string;
   children?: React.ReactNode;
@@ -236,6 +238,8 @@ export function Btn({
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
   compact?: boolean;
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
 }) {
   const isPrimary = variant === 'primary';
   const isViolet = variant === 'violet';
@@ -264,6 +268,10 @@ export function Btn({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || (typeof title === 'string' ? title : undefined)}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{ busy: !!loading }}
       style={({ pressed }) => [
         {
           flexDirection: 'row',

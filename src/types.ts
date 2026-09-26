@@ -400,6 +400,10 @@ export interface AppState {
   localNotifications?: LocalNotification[];
   calendarSync?: CalendarSyncState;
   externalCalendarEvents?: ExternalCalendarEvent[];
+  recoveredFocus?: RecoveredFocusSession | null;
+  lastIntegrityCheck?: ValidationResultSummary | null;
+  dataVersion?: string;
+  corruptedPayloadDetected?: boolean;
 }
 
 export interface AskLine {
@@ -551,3 +555,61 @@ export interface DailyExecutionSummary {
   overrunTasksCount: number;
   executionObservations: string[];
 }
+
+// ===========================================================================
+// V5 Types: Reliability, Resilience, Recovery, Integrity
+// ===========================================================================
+
+export interface ValidationStats {
+  taskCount: number;
+  projectCount: number;
+  goalCount: number;
+  habitCount: number;
+  routineCount: number;
+  blockCount: number;
+  focusSessionCount: number;
+  decisionRecordCount: number;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  stats: ValidationStats;
+}
+
+export interface ValidationResultSummary {
+  timestamp: number;
+  valid: boolean;
+  errorCount: number;
+  warningCount: number;
+  errors?: string[];
+  warnings?: string[];
+}
+
+export interface RecoveredFocusSession {
+  taskId: string;
+  taskTitle: string;
+  startedAt: number;
+  elapsedMinutes: number;
+  resolved: boolean;
+}
+
+export interface NotificationReconciliationResult {
+  scheduledCount: number;
+  cancelledCount: number;
+  preservedCount: number;
+  scheduledIds: string[];
+  cancelledIds: string[];
+  preservedIds: string[];
+}
+
+export interface CalendarReconciliationResult {
+  presentCount: number;
+  updatedCount: number;
+  removedCount: number;
+  presentIds: string[];
+  updatedIds: string[];
+  removedIds: string[];
+}
+

@@ -21,6 +21,7 @@ import { RescheduleModal } from './src/components/RescheduleModal';
 import { ReviewModal } from './src/components/ReviewModal';
 import { TabBar } from './src/components/TabBar';
 import { TaskSheet } from './src/components/TaskSheet';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { StoreProvider, UIContext, useStore } from './src/lib/store';
 import { MoneyScreen } from './src/screens/MoneyScreen';
 import { PlannerScreen } from './src/screens/PlannerScreen';
@@ -246,9 +247,11 @@ function Root() {
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <StoreProvider>
-        <Root />
-      </StoreProvider>
+      <ErrorBoundary>
+        <StoreProvider>
+          <Root />
+        </StoreProvider>
+      </ErrorBoundary>
     </GestureHandlerRootView>
   );
 }

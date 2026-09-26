@@ -58,11 +58,20 @@ export function PlannerScreen() {
     exportStateData,
     importStateData,
     deletePersonalPreference,
+    runIntegrityCheck,
+    reconcileAllNotifications,
+    reconcileExternalCalendar,
+    clearCorruptedNotice,
   } = useStore();
   const { openTask, openFocusModal, openBreakdownModal } = useUI();
   const [activeTab, setActiveTab] = useState<'tasks' | 'schedule' | 'weekly' | 'settings'>('tasks');
   const [input, setInput] = useState(state?.scheduleInput ?? '');
   const [thinking, setThinking] = useState(false);
+
+  // Recovery Center feedback state
+  const [integrityCheckResult, setIntegrityCheckResult] = useState<string | null>(null);
+  const [notifReconcileResult, setNotifReconcileResult] = useState<string | null>(null);
+  const [calReconcileResult, setCalReconcileResult] = useState<string | null>(null);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -642,6 +651,171 @@ export function PlannerScreen() {
             nestedScrollEnabled={true}
             keyboardShouldPersistTaps="handled"
           >
+            {/* V5: LIFEOS STATUS */}
+            <Card style={{ marginBottom: S.l, borderColor: alpha(C.blue, 0.3) }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.m }}>
+                <Ionicons name="pulse" size={18} color={C.blue} />
+                <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>LifeOS Status</Text>
+              </View>
+
+              <View style={{ gap: 8 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Local Data</Text>
+                  <Text style={{ color: state?.lastIntegrityCheck?.valid !== false ? C.green : C.red, fontSize: 13, fontWeight: '700' }}>
+                    {state?.lastIntegrityCheck?.valid !== false ? 'Healthy' : `${state?.lastIntegrityCheck?.errorCount} Issues`}
+                  </Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Notifications</Text>
+                  <Text style={{ color: state?.notificationPreferences?.enabled ? C.green : C.faint, fontSize: 13, fontWeight: '700' }}>
+                    {state?.notificationPreferences?.enabled ? 'Enabled' : 'Disabled'}
+                  </Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Calendar</Text>
+                  <Text style={{ color: state?.calendarSync?.status === 'synced' ? C.green : C.faint, fontSize: 13, fontWeight: '700' }}>
+                    {state?.calendarSync?.status === 'synced' ? 'Connected' : 'Not Connected'}
+                  </Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Last Calendar Sync</Text>
+                  <Text style={{ color: C.text, fontSize: 13 }}>
+                    {state?.calendarSync?.lastSyncedAt
+                      ? new Date(state.calendarSync.lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      : 'Never'}
+                  </Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Active Focus</Text>
+                  <Text style={{ color: state?.activeTaskId ? C.amber : C.faint, fontSize: 13, fontWeight: '700' }}>
+                    {state?.activeTaskId
+                      ? (state.tasks ?? []).find((t) => t.id === state.activeTaskId)?.title || 'Task'
+                      : 'None'}
+                  </Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Storage</Text>
+                  <Text style={{ color: C.text, fontSize: 13, fontWeight: '600' }}>Local only</Text>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: C.sub, fontSize: 13 }}>Data Version</Text>
+                  <Text style={{ color: C.blue, fontSize: 13, fontWeight: '700' }}>{state?.dataVersion || 'V5'}</Text>
+                </View>
+              </View>
+            </Card>
+
+            {/* V5: RECOVERY CENTER */}
+            <Card style={{ marginBottom: S.l, borderColor: alpha(C.amber, 0.3) }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.m }}>
+                <Ionicons name="shield-checkmark-outline" size={18} color={C.amber} />
+                <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>Recovery Center</Text>
+              </View>
+
+              <Text style={{ color: C.sub, fontSize: 12, marginBottom: S.m, lineHeight: 17 }}>
+                Deterministic integrity verification, safe notification reconciliation, and local state repair.
+              </Text>
+
+              <View style={{ gap: 10 }}>
+                {/* Check Data */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }}>Validate Local Data</Text>
+                    <Text style={{ color: C.faint, fontSize: 11 }}>Verify all IDs, dependencies & invariants</Text>
+                  </View>
+                  <Btn
+                    title="Run Check"
+                    variant="secondary"
+                    size="small"
+                    onPress={() => {
+                      const res = runIntegrityCheck();
+                      setIntegrityCheckResult(
+                        `Data validation complete: ${res.errors.length} errors, ${res.warnings.length} warnings.`
+                      );
+                    }}
+                    accessibilityLabel="Run data integrity check"
+                  />
+                </View>
+                {integrityCheckResult && (
+                  <Text style={{ color: integrityCheckResult.includes('0 errors') ? C.green : C.red, fontSize: 11, fontWeight: '700' }}>
+                    {integrityCheckResult}
+                  </Text>
+                )}
+
+                {/* Notification Reconciliation */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }}>Notification Reconciliation</Text>
+                    <Text style={{ color: C.faint, fontSize: 11 }}>Clean obsolete alerts & schedule missing</Text>
+                  </View>
+                  <Btn
+                    title="Reconcile"
+                    variant="secondary"
+                    size="small"
+                    onPress={async () => {
+                      const res = await reconcileAllNotifications();
+                      setNotifReconcileResult(
+                        `Reconciled: ${res.scheduledCount} scheduled, ${res.cancelledCount} cancelled, ${res.preservedCount} preserved.`
+                      );
+                    }}
+                    accessibilityLabel="Reconcile notifications"
+                  />
+                </View>
+                {notifReconcileResult && (
+                  <Text style={{ color: C.blue, fontSize: 11, fontWeight: '700' }}>
+                    {notifReconcileResult}
+                  </Text>
+                )}
+
+                {/* Calendar Reconciliation */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }}>Calendar Reconciliation</Text>
+                    <Text style={{ color: C.faint, fontSize: 11 }}>Verify external event sync status</Text>
+                  </View>
+                  <Btn
+                    title="Sync"
+                    variant="secondary"
+                    size="small"
+                    onPress={async () => {
+                      const res = await reconcileExternalCalendar();
+                      setCalReconcileResult(
+                        `Sync complete: ${res.presentCount} present, ${res.updatedCount} updated, ${res.removedCount} removed.`
+                      );
+                    }}
+                    accessibilityLabel="Reconcile calendar events"
+                  />
+                </View>
+                {calReconcileResult && (
+                  <Text style={{ color: C.green, fontSize: 11, fontWeight: '700' }}>
+                    {calReconcileResult}
+                  </Text>
+                )}
+
+                {/* Clear Temporary Recovery Data */}
+                {state?.corruptedPayloadDetected && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6 }}>
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                      <Text style={{ color: C.red, fontSize: 13, fontWeight: '700' }}>Temporary Recovery Data</Text>
+                      <Text style={{ color: C.faint, fontSize: 11 }}>Corrupted payload buffer stored</Text>
+                    </View>
+                    <Btn
+                      title="Clear"
+                      variant="ghost"
+                      size="small"
+                      onPress={clearCorruptedNotice}
+                      accessibilityLabel="Clear temporary recovery data"
+                    />
+                  </View>
+                )}
+              </View>
+            </Card>
+
             {/* 1. LOCAL SEARCH */}
             <Card style={{ marginBottom: S.l }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.m }}>

@@ -58,6 +58,8 @@ export function TodayScreen({ navigation }: { navigation: any }) {
     stopActiveTask,
     completeActiveTask,
     toggleHabit,
+    resolveFocusRecovery,
+    clearCorruptedNotice,
   } = useStore();
   const {
     openAsk,
@@ -185,6 +187,89 @@ export function TodayScreen({ navigation }: { navigation: any }) {
             </Pressable>
           </View>
         </Animated.View>
+
+        {/* V5: CRASH-RECOVERED FOCUS SESSION CARD */}
+        {state?.recoveredFocus && (
+          <Animated.View entering={FadeInDown.springify()}>
+            <Card
+              style={{
+                marginTop: S.m,
+                borderColor: alpha(C.amber, 0.4),
+                backgroundColor: alpha(C.amber, 0.08),
+                padding: S.m,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <IconBadge icon="refresh" color={C.amber} size={18} />
+                <Text style={{ color: C.amber, fontSize: 13, fontWeight: '800', letterSpacing: 0.5 }}>
+                  FOCUS SESSION RECOVERED
+                </Text>
+              </View>
+              <Text style={{ color: C.text, fontSize: 16, fontWeight: '700', marginTop: 8 }}>
+                "{state.recoveredFocus.taskTitle}"
+              </Text>
+              <Text style={{ color: C.sub, fontSize: 13, marginTop: 4 }}>
+                App restarted during an active focus session. ~{state.recoveredFocus.elapsedMinutes} minutes elapsed.
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+                <Btn
+                  title="Resume"
+                  variant="primary"
+                  onPress={() => resolveFocusRecovery('resume')}
+                  style={{ flex: 1, paddingVertical: 10 }}
+                  accessibilityLabel="Resume recovered focus session"
+                />
+                <Btn
+                  title="Complete"
+                  variant="secondary"
+                  onPress={() => resolveFocusRecovery('complete', state?.recoveredFocus?.elapsedMinutes)}
+                  style={{ flex: 1, paddingVertical: 10 }}
+                  accessibilityLabel="Complete task and log focus session"
+                />
+                <Btn
+                  title="Discard"
+                  variant="ghost"
+                  onPress={() => resolveFocusRecovery('discard')}
+                  style={{ flex: 1, paddingVertical: 10 }}
+                  accessibilityLabel="Discard recovered session"
+                />
+              </View>
+            </Card>
+          </Animated.View>
+        )}
+
+        {/* V5: CORRUPTED PAYLOAD RECOVERY BANNER */}
+        {state?.corruptedPayloadDetected && (
+          <Animated.View entering={FadeInDown.springify()}>
+            <Card
+              style={{
+                marginTop: S.m,
+                borderColor: alpha(C.red, 0.4),
+                backgroundColor: alpha(C.red, 0.08),
+                padding: S.m,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <IconBadge icon="alert-circle" color={C.red} size={18} />
+                <Text style={{ color: C.red, fontSize: 13, fontWeight: '800' }}>
+                  RECOVERY SNAPSHOT ACTIVE
+                </Text>
+              </View>
+              <Text style={{ color: C.sub, fontSize: 12.5, marginTop: 6, lineHeight: 18 }}>
+                Corrupted local data was detected and isolated safely. Your corrupted payload has been preserved in recovery storage and can be inspected in Tools.
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+                <Btn
+                  title="Dismiss Notice"
+                  variant="ghost"
+                  onPress={clearCorruptedNotice}
+                  style={{ flex: 1, paddingVertical: 8 }}
+                  accessibilityLabel="Dismiss recovery notice"
+                />
+              </View>
+            </Card>
+          </Animated.View>
+        )}
 
         {/* PHASE 4: MORNING DAILY BRIEF */}
         {morningBrief && !briefDismissed && (

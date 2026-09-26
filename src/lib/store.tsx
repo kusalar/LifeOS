@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { AppState as RNAppState } from 'react-native';
 import type {
   AdaptiveProposal,
   AppState,
@@ -22,6 +23,9 @@ import type {
   TaskTemplate,
   TaskType,
   ExternalCalendarEvent,
+  ValidationResult,
+  NotificationReconciliationResult,
+  CalendarReconciliationResult,
 } from '../types';
 import { localDateKey, nowMinutes, uid } from './dates';
 import {
@@ -30,10 +34,22 @@ import {
   exportLifeOSData,
   importExternalCalendarEvents,
   parsePlan,
+  planLocalNotifications,
+  reconcileExternalCalendarEvents,
   validateLifeOSImport,
 } from './engine';
-import { DEFAULT_NOTIFICATION_PREFERENCES } from './notifications';
+import { DEFAULT_NOTIFICATION_PREFERENCES, localNotificationService } from './notifications';
 import { makeSeed } from './seed';
+import { validateAppState, repairSafeDefaults } from './validation';
+import {
+  safeSaveState,
+  saveCorruptedPayload,
+  clearCorruptedPayload,
+  detectStaleFocusSession,
+  resolveRecoveredFocus,
+  setRecoverySnapshot,
+  getRecoverySnapshot,
+} from './recovery';
 
 const KEY = 'lifeos-state-v2';
 
@@ -109,6 +125,11 @@ interface StoreCtx {
   exportStateData: () => string;
   importStateData: (jsonString: string, mode: 'replace' | 'cancel') => { success: boolean; error?: string };
   resetDemo: () => void;
+  runIntegrityCheck: () => ValidationResult;
+  resolveFocusRecovery: (action: 'resume' | 'complete' | 'discard', customMinutes?: number) => void;
+  reconcileAllNotifications: () => Promise<NotificationReconciliationResult>;
+  reconcileExternalCalendar: (incomingEvents?: ExternalCalendarEvent[]) => Promise<CalendarReconciliationResult>;
+  clearCorruptedNotice: () => void;
 }
 
 const Ctx = createContext<StoreCtx>({
@@ -166,6 +187,11 @@ const Ctx = createContext<StoreCtx>({
   exportStateData: () => '',
   importStateData: () => ({ success: false }),
   resetDemo: () => {},
+  runIntegrityCheck: () => ({ valid: true, errors: [], warnings: [], stats: { taskCount: 0, projectCount: 0, goalCount: 0, habitCount: 0, routineCount: 0, blockCount: 0, focusSessionCount: 0, decisionRecordCount: 0 } }),
+  resolveFocusRecovery: () => {},
+  reconcileAllNotifications: async () => ({ scheduledCount: 0, cancelledCount: 0, preservedCount: 0, scheduledIds: [], cancelledIds: [], preservedIds: [] }),
+  reconcileExternalCalendar: async () => ({ presentCount: 0, updatedCount: 0, removedCount: 0, presentIds: [], updatedIds: [], removedIds: [] }),
+  clearCorruptedNotice: () => {},
 });
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
@@ -177,7 +203,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       try {
         const raw = await AsyncStorage.getItem(KEY);
         if (raw) {
-          const parsed = JSON.parse(raw);
+          let parsed: any;
+          try {
+            parsed = JSON.parse(raw);
+          } catch (jsonErr) {
+            saveCorruptedPayload(raw);
+            const safeFallback = getRecoverySnapshot() || makeSeed();
+            safeFallback.corruptedPayloadDetected = true;
+            setState(safeFallback);
+            setReady(true);
+            return;
+          }
+
           // Safe Migration check using nullish-coalescing
           parsed.dailyBudget = parsed.dailyBudget ?? 400;
           parsed.weeklyBudget = parsed.weeklyBudget ?? 2800;
@@ -250,36 +287,68 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             }));
           }
 
-          // Harden: ensure activeTaskId references a valid, incomplete task
-          if (parsed.activeTaskId) {
-            const activeExists = parsed.tasks?.find((t: any) => t.id === parsed.activeTaskId && !t.done);
-            if (!activeExists) {
-              parsed.activeTaskId = null;
-              parsed.activeTaskStartedAt = null;
-              parsed.activeTaskPausedAt = null;
-              parsed.activeTaskAccumulatedMs = 0;
-            }
+          // V5 Integrity & Defaults Check
+          const repaired = repairSafeDefaults(parsed);
+          const validation = validateAppState(repaired);
+          repaired.lastIntegrityCheck = {
+            timestamp: Date.now(),
+            valid: validation.valid,
+            errorCount: validation.errors.length,
+            warningCount: validation.warnings.length,
+            errors: validation.errors,
+            warnings: validation.warnings,
+          };
+          repaired.dataVersion = 'V5';
+
+          // Focus Crash Recovery Detection
+          const staleFocus = detectStaleFocusSession(repaired);
+          if (staleFocus) {
+            repaired.recoveredFocus = staleFocus;
           }
 
-          setState(parsed);
+          setRecoverySnapshot(repaired);
+          setState(repaired);
           setReady(true);
           return;
         }
-      } catch {}
+      } catch (loadErr) {
+        // Fallback safely without crashing
+      }
       const seed = makeSeed();
+      seed.dataVersion = 'V5';
+      setRecoverySnapshot(seed);
       setState(seed);
       setReady(true);
       try {
-        await AsyncStorage.setItem(KEY, JSON.stringify(seed));
+        await safeSaveState(seed, true);
       } catch {}
     })();
   }, []);
 
   useEffect(() => {
-    if (state) {
-      AsyncStorage.setItem(KEY, JSON.stringify(state)).catch(() => {});
+    if (state && ready) {
+      safeSaveState(state, false).catch(() => {});
     }
-  }, [state]);
+  }, [state, ready]);
+
+  useEffect(() => {
+    const subscription = RNAppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        setState((current) => {
+          if (!current) return current;
+          const stale = detectStaleFocusSession(current);
+          if (stale && !current.recoveredFocus) {
+            return { ...current, recoveredFocus: stale };
+          }
+          return current;
+        });
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   const value = useMemo<StoreCtx>(
     () => ({
@@ -927,7 +996,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             ...(state || makeSeed()),
             ...val.data,
           };
-          setState(merged);
+          const repaired = repairSafeDefaults(merged);
+          const validation = validateAppState(repaired);
+          if (!validation.valid) {
+            return {
+              success: false,
+              error: `Import integrity check failed: ${validation.errors.join('; ')}`,
+            };
+          }
+          repaired.dataVersion = val.version || 'lifeos-v5';
+          repaired.lastIntegrityCheck = {
+            timestamp: Date.now(),
+            valid: validation.valid,
+            errorCount: validation.errors.length,
+            warningCount: validation.warnings.length,
+            errors: validation.errors,
+            warnings: validation.warnings,
+          };
+          setRecoverySnapshot(repaired);
+          setState(repaired);
           return { success: true };
         } catch (err: any) {
           if (currentBackup) setState(currentBackup);
@@ -937,6 +1024,68 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       resetDemo: () => {
         const seed = makeSeed();
         setState(seed);
+      },
+      runIntegrityCheck: () => {
+        const current = state || makeSeed();
+        const res = validateAppState(current);
+        setState((s) =>
+          s
+            ? {
+                ...s,
+                lastIntegrityCheck: {
+                  timestamp: Date.now(),
+                  valid: res.valid,
+                  errorCount: res.errors.length,
+                  warningCount: res.warnings.length,
+                  errors: res.errors,
+                  warnings: res.warnings,
+                },
+              }
+            : s
+        );
+        return res;
+      },
+      resolveFocusRecovery: (action, customMinutes) =>
+        setState((s) => {
+          if (!s) return s;
+          const { updatedState } = resolveRecoveredFocus(s, action, customMinutes);
+          return {
+            ...updatedState,
+            recoveredFocus: null,
+          };
+        }),
+      reconcileAllNotifications: async () => {
+        const current = state || makeSeed();
+        const planned = planLocalNotifications(current);
+        const result = await localNotificationService.reconcile(planned);
+        setState((s) => (s ? { ...s, localNotifications: planned } : s));
+        return result;
+      },
+      reconcileExternalCalendar: async (incomingEvents) => {
+        const current = state || makeSeed();
+        const incoming = incomingEvents || current.externalCalendarEvents || [];
+        const result = reconcileExternalCalendarEvents(current.externalCalendarEvents, incoming);
+        const updatedSchedule = importExternalCalendarEvents(current.schedule, incoming, new Date());
+        setState((s) =>
+          s
+            ? {
+                ...s,
+                schedule: updatedSchedule,
+                externalCalendarEvents: incoming,
+                calendarSync: {
+                  status: 'synced',
+                  lastSyncedAt: Date.now(),
+                  importedEventCount: incoming.length,
+                  connectedCalendarName: s.calendarSync?.connectedCalendarName || 'Academic Calendar',
+                },
+              }
+            : s
+        );
+        return result;
+      },
+      clearCorruptedNotice: () => {
+        clearCorruptedPayload();
+        setState((s) => (s ? { ...s, corruptedPayloadDetected: false } : s));
       },
     }),
     [state, ready]

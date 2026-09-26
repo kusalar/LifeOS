@@ -45,8 +45,11 @@ export function MoneyScreen() {
       <FlatList
         data={filteredExpenses}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={{ padding: S.l, paddingBottom: 150 }}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: S.l, paddingBottom: 170 }}
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled={true}
+        keyboardShouldPersistTaps="handled"
         ListHeaderComponent={
           <View>
             <Animated.View entering={FadeInDown.springify()} style={{ flexDirection: 'row', alignItems: 'center' }}>

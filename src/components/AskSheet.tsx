@@ -13,25 +13,31 @@ import {
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { useStore } from '../lib/store';
 import { askLifeOS } from '../lib/engine';
-import type { AskReply } from '../types';
+import type { AskReply, ProposedTask } from '../types';
 import { alpha, C, R, S } from '../theme';
+import { Btn } from './ui';
 
 const SUGGESTIONS = [
+  'I have an exam next Thursday. I need to finish chapters 4–8, and my VLSI report is due Tuesday.',
   'I have ₹500 and need lunch, transport and a notebook',
   'I have 2 hours free, what should I do?',
   'What should I do right now?',
 ];
 
 export function AskSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { state } = useStore();
+  const { state, addProposedTasks } = useStore();
   const [q, setQ] = useState('');
   const [thinking, setThinking] = useState(false);
   const [reply, setReply] = useState<AskReply | null>(null);
+  const [selectedPlanTasks, setSelectedPlanTasks] = useState<Record<number, boolean>>({});
+  const [planConfirmed, setPlanConfirmed] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setReply(null);
       setThinking(false);
+      setSelectedPlanTasks({});
+      setPlanConfirmed(false);
     }
   }, [visible]);
 
@@ -41,10 +47,38 @@ export function AskSheet({ visible, onClose }: { visible: boolean; onClose: () =
     setQ(query);
     setThinking(true);
     setReply(null);
+    setPlanConfirmed(false);
     setTimeout(() => {
-      setReply(askLifeOS(query, state));
+      const rep = askLifeOS(query, state);
+      setReply(rep);
+      if (rep.proposedTasks) {
+        const initialSelected: Record<number, boolean> = {};
+        rep.proposedTasks.forEach((_, idx) => {
+          initialSelected[idx] = true;
+        });
+        setSelectedPlanTasks(initialSelected);
+      }
       setThinking(false);
     }, 850);
+  };
+
+  const handleAddPlan = () => {
+    if (!reply?.proposedTasks) return;
+    const toAdd = reply.proposedTasks
+      .filter((_, idx) => selectedPlanTasks[idx])
+      .map((t) => ({
+        title: t.title,
+        priority: t.priority,
+        dueTs: t.dueTs || Date.now() + 86400000,
+        tag: 'General',
+        projectId: t.projectId,
+        estimatedMinutes: t.estimatedMinutes,
+        taskType: t.taskType,
+      }));
+    if (toAdd.length > 0) {
+      addProposedTasks(toAdd);
+      setPlanConfirmed(true);
+    }
   };
 
   const toneColor = (t?: string) => (t === 'good' ? C.green : t === 'bad' ? C.red : t === 'accent' ? C.amber : C.text);
@@ -208,6 +242,85 @@ export function AskSheet({ visible, onClose }: { visible: boolean; onClose: () =
                     />
                     <Text style={{ color: C.text, fontSize: 12.5, lineHeight: 18, flex: 1 }}>{reply.verdict}</Text>
                   </View>
+
+                  {/* Proposed Tasks for NL Planning */}
+                  {reply.proposedTasks && reply.proposedTasks.length > 0 ? (
+                    <View style={{ marginTop: S.m, paddingTop: S.m, borderTopWidth: 1, borderTopColor: C.border }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Text style={{ color: C.amber, fontSize: 11, fontWeight: '800', letterSpacing: 1 }}>
+                          PROPOSED CHANGES
+                        </Text>
+                        <Text style={{ color: C.faint, fontSize: 11 }}>
+                          Nothing added yet
+                        </Text>
+                      </View>
+
+                      {planConfirmed ? (
+                        <View style={{ paddingVertical: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }}>
+                          <Ionicons name="checkmark-circle" size={18} color={C.green} />
+                          <Text style={{ color: C.green, fontSize: 13, fontWeight: '700' }}>
+                            Tasks successfully added to your plan!
+                          </Text>
+                        </View>
+                      ) : (
+                        <>
+                          {reply.proposedTasks.map((t, idx) => {
+                            const selected = !!selectedPlanTasks[idx];
+                            return (
+                              <Pressable
+                                key={idx}
+                                onPress={() =>
+                                  setSelectedPlanTasks((prev) => ({
+                                    ...prev,
+                                    [idx]: !prev[idx],
+                                  }))
+                                }
+                                style={{
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  gap: 10,
+                                  paddingVertical: 8,
+                                  borderBottomWidth: 1,
+                                  borderBottomColor: alpha(C.border, 0.5),
+                                }}
+                              >
+                                <Ionicons
+                                  name={selected ? 'checkbox' : 'square-outline'}
+                                  size={18}
+                                  color={selected ? C.amber : C.faint}
+                                />
+                                <Text
+                                  style={{
+                                    color: selected ? C.text : C.sub,
+                                    fontSize: 13,
+                                    flex: 1,
+                                    fontWeight: selected ? '600' : '400',
+                                  }}
+                                >
+                                  {t.title}
+                                </Text>
+                                {t.estimatedMinutes ? (
+                                  <Text style={{ color: C.faint, fontSize: 11, fontWeight: '600' }}>
+                                    {t.estimatedMinutes}m
+                                  </Text>
+                                ) : null}
+                              </Pressable>
+                            );
+                          })}
+
+                          <View style={{ marginTop: S.m }}>
+                            {Object.values(selectedPlanTasks).filter(Boolean).length > 0 ? (
+                              <Btn
+                                title={`Add Plan (${Object.values(selectedPlanTasks).filter(Boolean).length})`}
+                                icon="add"
+                                onPress={handleAddPlan}
+                              />
+                            ) : null}
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  ) : null}
                 </View>
               </Animated.View>
             ) : null}

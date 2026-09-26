@@ -1,20 +1,38 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type {
+  AdaptiveProposal,
   AppState,
   DailyReview,
   ExpenseCategory,
   FocusSession,
+  Goal,
   Habit,
   HabitCompletion,
+  NotificationPreferences,
+  PersonalPreference,
+  PlanningPreferences,
   Priority,
   Project,
   ProjectStatus,
+  RecurringTask,
   Reminder,
+  Routine,
   Task,
+  TaskTemplate,
+  TaskType,
+  ExternalCalendarEvent,
 } from '../types';
-import { localDateKey, uid } from './dates';
-import { buildSchedule, parsePlan } from './engine';
+import { localDateKey, nowMinutes, uid } from './dates';
+import {
+  applyProposalToSchedule,
+  buildSchedule,
+  exportLifeOSData,
+  importExternalCalendarEvents,
+  parsePlan,
+  validateLifeOSImport,
+} from './engine';
+import { DEFAULT_NOTIFICATION_PREFERENCES } from './notifications';
 import { makeSeed } from './seed';
 
 const KEY = 'lifeos-state-v2';
@@ -34,6 +52,8 @@ interface StoreCtx {
     note?: string;
     projectId?: string;
     estimatedMinutes?: number;
+    taskType?: TaskType;
+    blockedBy?: string[];
   }) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
   deleteTask: (id: string) => void;
@@ -66,6 +86,28 @@ interface StoreCtx {
   completeReminder: (id: string) => void;
   deleteReminder: (id: string) => void;
   updateBudget: (budgets: { dailyBudget?: number; weeklyBudget?: number; monthlyBudget?: number }) => void;
+  applyRescheduleProposal: (proposalId: string) => void;
+  rejectRescheduleProposal: (proposalId: string) => void;
+  dismissRescheduleProposal: (proposalId: string) => void;
+  addProposedTasks: (tasks: Array<Omit<Task, 'id' | 'createdAt' | 'done'>>) => void;
+  updatePlanningPreferences: (prefs: Partial<PlanningPreferences>) => void;
+  confirmWeeklyPlan: () => void;
+  addGoal: (goal: { title: string; description?: string; targetDate?: number; projectIds?: string[] }) => string;
+  updateGoal: (id: string, updates: Partial<Goal>) => void;
+  deleteGoal: (id: string) => void;
+  addRecurringTask: (item: Omit<RecurringTask, 'id' | 'createdAt'>) => string;
+  toggleRecurringTask: (id: string) => void;
+  deleteRecurringTask: (id: string) => void;
+  addRoutine: (routine: Omit<Routine, 'id' | 'createdAt'>) => string;
+  toggleRoutine: (id: string) => void;
+  deleteRoutine: (id: string) => void;
+  setPersonalPreference: (key: string, value: string) => void;
+  deletePersonalPreference: (id: string) => void;
+  updateNotificationPreferences: (prefs: Partial<NotificationPreferences>) => void;
+  syncExternalCalendar: (events: ExternalCalendarEvent[], calendarName?: string) => void;
+  disconnectCalendar: () => void;
+  exportStateData: () => string;
+  importStateData: (jsonString: string, mode: 'replace' | 'cancel') => { success: boolean; error?: string };
   resetDemo: () => void;
 }
 
@@ -101,6 +143,28 @@ const Ctx = createContext<StoreCtx>({
   completeReminder: () => {},
   deleteReminder: () => {},
   updateBudget: () => {},
+  applyRescheduleProposal: () => {},
+  rejectRescheduleProposal: () => {},
+  dismissRescheduleProposal: () => {},
+  addProposedTasks: () => {},
+  updatePlanningPreferences: () => {},
+  confirmWeeklyPlan: () => {},
+  addGoal: () => '',
+  updateGoal: () => {},
+  deleteGoal: () => {},
+  addRecurringTask: () => '',
+  toggleRecurringTask: () => {},
+  deleteRecurringTask: () => {},
+  addRoutine: () => '',
+  toggleRoutine: () => {},
+  deleteRoutine: () => {},
+  setPersonalPreference: () => {},
+  deletePersonalPreference: () => {},
+  updateNotificationPreferences: () => {},
+  syncExternalCalendar: () => {},
+  disconnectCalendar: () => {},
+  exportStateData: () => '',
+  importStateData: () => ({ success: false }),
   resetDemo: () => {},
 });
 
@@ -114,7 +178,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const raw = await AsyncStorage.getItem(KEY);
         if (raw) {
           const parsed = JSON.parse(raw);
-          // Migration check using nullish-coalescing (value ?? default)
+          // Safe Migration check using nullish-coalescing
           parsed.dailyBudget = parsed.dailyBudget ?? 400;
           parsed.weeklyBudget = parsed.weeklyBudget ?? 2800;
           parsed.monthlyBudget = parsed.monthlyBudget ?? 12000;
@@ -130,12 +194,59 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           parsed.activeTaskPausedAt = parsed.activeTaskPausedAt ?? null;
           parsed.activeTaskAccumulatedMs = parsed.activeTaskAccumulatedMs ?? 0;
 
+          // V2 Safe Migration Defaults
+          parsed.planningPreferences = {
+            deepWorkWindow: { start: 9 * 60, end: 12 * 60 },
+            lightWorkWindow: { start: 14 * 60, end: 17 * 60 },
+            personalWindow: { start: 19 * 60, end: 24 * 60 },
+            useHistoricalEstimateAdjustment: false,
+            ...(parsed.planningPreferences || {}),
+          };
+          parsed.adaptiveProposals = Array.isArray(parsed.adaptiveProposals) ? parsed.adaptiveProposals : [];
+          parsed.weeklyPlanConfirmed = parsed.weeklyPlanConfirmed ?? false;
+
+          // V3 Safe Migration Defaults
+          parsed.goals = Array.isArray(parsed.goals) ? parsed.goals : [];
+          parsed.recurringTasks = Array.isArray(parsed.recurringTasks) ? parsed.recurringTasks : [];
+          parsed.routines = Array.isArray(parsed.routines) ? parsed.routines : [];
+          parsed.personalPreferences = Array.isArray(parsed.personalPreferences) ? parsed.personalPreferences : [];
+          parsed.decisionRecords = Array.isArray(parsed.decisionRecords) ? parsed.decisionRecords : [];
+          parsed.taskTemplates = Array.isArray(parsed.taskTemplates) ? parsed.taskTemplates : [];
+
+          // V4 Safe Migration Defaults
+          parsed.notificationPreferences = parsed.notificationPreferences ?? {
+            enabled: true,
+            taskReminders: true,
+            deadlineReminders: true,
+            routineReminders: true,
+            weeklyReviewReminder: true,
+            quietHours: {
+              start: 22 * 60 + 30,
+              end: 7 * 60,
+            },
+          };
+          parsed.localNotifications = Array.isArray(parsed.localNotifications) ? parsed.localNotifications : [];
+          parsed.calendarSync = parsed.calendarSync ?? {
+            status: 'never_synced',
+            importedEventCount: 0,
+          };
+          parsed.externalCalendarEvents = Array.isArray(parsed.externalCalendarEvents) ? parsed.externalCalendarEvents : [];
+
+          if (parsed.schedule && parsed.schedule.length > 0) {
+            parsed.schedule = parsed.schedule.map((b: any) => ({
+              ...b,
+              source: b.source || 'lifeos',
+            }));
+          }
+
           if (parsed.tasks && parsed.tasks.length > 0) {
             parsed.tasks = parsed.tasks.map((t: any) => ({
               ...t,
               priority: t.priority || (t.tag === 'Exam' ? 'critical' : t.tag === 'College' ? 'important' : 'normal'),
               dueTs: t.dueTs || Date.now(),
               createdAt: t.createdAt || Date.now(),
+              blockedBy: Array.isArray(t.blockedBy) ? t.blockedBy : [],
+              taskType: t.taskType || undefined,
             }));
           }
 
@@ -206,6 +317,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                     note: taskData.note,
                     projectId: taskData.projectId,
                     estimatedMinutes: taskData.estimatedMinutes,
+                    taskType: taskData.taskType,
+                    blockedBy: taskData.blockedBy || [],
                     done: false,
                     createdAt: Date.now(),
                   },
@@ -454,6 +567,36 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             completed: true,
           };
 
+          // Update matching schedule block if present
+          const updatedSchedule = s.schedule.map((b) =>
+            b.taskId === task.id || b.title === task.title ? { ...b, done: true } : b
+          );
+          // Update matching decision record outcome
+          const updatedDecisions = (s.decisionRecords ?? []).map((d) =>
+            d.subjectId === task.id || d.subjectTitle === task.title ? { ...d, outcome: 'completed' } : d
+          );
+
+          // Overrun check: if session ran > 15m longer than estimate
+          const overrunMinutes = task.estimatedMinutes ? durationMinutes - task.estimatedMinutes : 0;
+          let newProposals = s.adaptiveProposals ?? [];
+          if (overrunMinutes >= 15) {
+            newProposals = [
+              {
+                id: 'prop-' + uid(),
+                taskId: task.id,
+                taskTitle: task.title,
+                newStart: nowMinutes(new Date()),
+                newEnd: nowMinutes(new Date()) + 30,
+                reason: `Focus session for "${task.title}" ran ${overrunMinutes} min longer than estimated.`,
+                impact: 'Compresses remaining afternoon gaps.',
+                priority: 'important',
+                status: 'pending',
+                createdAt: Date.now(),
+              },
+              ...newProposals,
+            ];
+          }
+
           return {
             ...s,
             activeTaskId: null,
@@ -462,6 +605,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             activeTaskAccumulatedMs: 0,
             focusSessions: [newSession, ...s.focusSessions],
             tasks: s.tasks.map((t) => (t.id === task.id ? { ...t, done: true } : t)),
+            schedule: updatedSchedule,
+            decisionRecords: updatedDecisions,
+            adaptiveProposals: newProposals,
           };
         }),
 
@@ -615,6 +761,179 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         setState((s) => (s ? { ...s, reminders: s.reminders.filter((r) => r.id !== id) } : s)),
       updateBudget: (budgets: { dailyBudget?: number; weeklyBudget?: number; monthlyBudget?: number }) =>
         setState((s) => (s ? { ...s, ...budgets } : s)),
+      applyRescheduleProposal: (proposalId: string) =>
+        setState((s) => {
+          if (!s) return s;
+          const proposals = s.adaptiveProposals ?? [];
+          const prop = proposals.find((p) => p.id === proposalId);
+          if (!prop) return s;
+
+          const updatedSchedule = applyProposalToSchedule(s.schedule, prop);
+          return {
+            ...s,
+            schedule: updatedSchedule,
+            adaptiveProposals: proposals.map((p) =>
+              p.id === proposalId ? { ...p, status: 'accepted' } : p
+            ),
+          };
+        }),
+      rejectRescheduleProposal: (proposalId: string) =>
+        setState((s) => {
+          if (!s) return s;
+          const proposals = s.adaptiveProposals ?? [];
+          return {
+            ...s,
+            adaptiveProposals: proposals.map((p) =>
+              p.id === proposalId ? { ...p, status: 'rejected' } : p
+            ),
+          };
+        }),
+      dismissRescheduleProposal: (proposalId: string) =>
+        setState((s) => (s ? { ...s, adaptiveProposals: (s.adaptiveProposals ?? []).filter((p) => p.id !== proposalId) } : s)),
+      addProposedTasks: (newTasks) =>
+        setState((s) => {
+          if (!s) return s;
+          const now = Date.now();
+          const created: Task[] = newTasks.map((t) => ({
+            id: uid(),
+            title: t.title,
+            priority: t.priority,
+            dueTs: t.dueTs || now + 86400000,
+            tag: t.tag || 'General',
+            note: t.note,
+            projectId: t.projectId,
+            estimatedMinutes: t.estimatedMinutes,
+            taskType: t.taskType,
+            blockedBy: t.blockedBy || [],
+            done: false,
+            createdAt: now,
+          }));
+          return {
+            ...s,
+            tasks: [...created, ...s.tasks],
+          };
+        }),
+      updatePlanningPreferences: (prefs) =>
+        setState((s) => (s ? { ...s, planningPreferences: { ...(s.planningPreferences ?? {}), ...prefs } } : s)),
+      confirmWeeklyPlan: () =>
+        setState((s) => (s ? { ...s, weeklyPlanConfirmed: true } : s)),
+      addGoal: (goalData) => {
+        const id = 'goal-' + uid();
+        setState((s) => {
+          if (!s) return s;
+          const newGoal: Goal = {
+            id,
+            title: goalData.title,
+            description: goalData.description,
+            status: 'active',
+            targetDate: goalData.targetDate,
+            projectIds: goalData.projectIds || [],
+            createdAt: Date.now(),
+          };
+          return { ...s, goals: [...(s.goals ?? []), newGoal] };
+        });
+        return id;
+      },
+      updateGoal: (id, updates) =>
+        setState((s) => (s ? { ...s, goals: (s.goals ?? []).map((g) => (g.id === id ? { ...g, ...updates } : g)) } : s)),
+      deleteGoal: (id) =>
+        setState((s) => (s ? { ...s, goals: (s.goals ?? []).filter((g) => g.id !== id) } : s)),
+      addRecurringTask: (item) => {
+        const id = 'rec-' + uid();
+        setState((s) => {
+          if (!s) return s;
+          const rec: RecurringTask = { ...item, id, createdAt: Date.now() };
+          return { ...s, recurringTasks: [...(s.recurringTasks ?? []), rec] };
+        });
+        return id;
+      },
+      toggleRecurringTask: (id) =>
+        setState((s) => (s ? { ...s, recurringTasks: (s.recurringTasks ?? []).map((r) => (r.id === id ? { ...r, active: !r.active } : r)) } : s)),
+      deleteRecurringTask: (id) =>
+        setState((s) => (s ? { ...s, recurringTasks: (s.recurringTasks ?? []).filter((r) => r.id !== id) } : s)),
+      addRoutine: (routineData) => {
+        const id = 'routine-' + uid();
+        setState((s) => {
+          if (!s) return s;
+          const routine: Routine = { ...routineData, id, createdAt: Date.now() };
+          return { ...s, routines: [...(s.routines ?? []), routine] };
+        });
+        return id;
+      },
+      toggleRoutine: (id) =>
+        setState((s) => (s ? { ...s, routines: (s.routines ?? []).map((r) => (r.id === id ? { ...r, active: !r.active } : r)) } : s)),
+      deleteRoutine: (id) =>
+        setState((s) => (s ? { ...s, routines: (s.routines ?? []).filter((r) => r.id !== id) } : s)),
+      setPersonalPreference: (key, valueStr) =>
+        setState((s) => {
+          if (!s) return s;
+          const existing = (s.personalPreferences ?? []).filter((p) => p.key.toLowerCase() !== key.toLowerCase());
+          const newPref: PersonalPreference = {
+            id: 'pref-' + uid(),
+            key,
+            value: valueStr,
+            source: 'user',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          return { ...s, personalPreferences: [...existing, newPref] };
+        }),
+      deletePersonalPreference: (id) =>
+        setState((s) => (s ? { ...s, personalPreferences: (s.personalPreferences ?? []).filter((p) => p.id !== id) } : s)),
+      updateNotificationPreferences: (prefs) =>
+        setState((s) => (s ? { ...s, notificationPreferences: { ...(s.notificationPreferences || DEFAULT_NOTIFICATION_PREFERENCES), ...prefs } } : s)),
+      syncExternalCalendar: (events, calendarName) =>
+        setState((s) => {
+          if (!s) return s;
+          const updatedSchedule = importExternalCalendarEvents(s.schedule, events, new Date());
+          return {
+            ...s,
+            schedule: updatedSchedule,
+            externalCalendarEvents: events,
+            calendarSync: {
+              status: 'synced',
+              lastSyncedAt: Date.now(),
+              importedEventCount: events.length,
+              connectedCalendarName: calendarName || 'Local Device Calendar',
+            },
+          };
+        }),
+      disconnectCalendar: () =>
+        setState((s) => {
+          if (!s) return s;
+          const cleanedSchedule = s.schedule.filter((b) => b.source !== 'external');
+          return {
+            ...s,
+            schedule: cleanedSchedule,
+            externalCalendarEvents: [],
+            calendarSync: {
+              status: 'never_synced',
+              importedEventCount: 0,
+            },
+          };
+        }),
+      exportStateData: () => (state ? exportLifeOSData(state) : ''),
+      importStateData: (jsonString, mode) => {
+        if (mode === 'cancel') {
+          return { success: false, error: 'Import cancelled by user.' };
+        }
+        const val = validateLifeOSImport(jsonString);
+        if (!val.valid || !val.data) {
+          return { success: false, error: val.error || 'Invalid import payload.' };
+        }
+        const currentBackup = state ? JSON.parse(JSON.stringify(state)) : null;
+        try {
+          const merged: AppState = {
+            ...(state || makeSeed()),
+            ...val.data,
+          };
+          setState(merged);
+          return { success: true };
+        } catch (err: any) {
+          if (currentBackup) setState(currentBackup);
+          return { success: false, error: `Import failed: ${err.message}` };
+        }
+      },
       resetDemo: () => {
         const seed = makeSeed();
         setState(seed);
@@ -643,6 +962,9 @@ interface UICtx {
   openHabitSheet: (habitToEdit?: Habit) => void;
   openReviewModal: (dateKey?: string) => void;
   openHabitsModal: () => void;
+  openBreakdownModal: (initialInput?: string, projectId?: string) => void;
+  openRescheduleModal: (proposal?: AdaptiveProposal) => void;
+  openWeeklyPlanModal: () => void;
 }
 
 export const UIContext = createContext<UICtx>({
@@ -656,6 +978,9 @@ export const UIContext = createContext<UICtx>({
   openHabitSheet: () => {},
   openReviewModal: () => {},
   openHabitsModal: () => {},
+  openBreakdownModal: () => {},
+  openRescheduleModal: () => {},
+  openWeeklyPlanModal: () => {},
 });
 
 export function useUI(): UICtx {

@@ -13,13 +13,19 @@ import {
 import Animated, { FadeInUp } from 'react-native-reanimated';
 import { addDays, atTime, dueLabel, fmtDateShort, fmtTime } from '../lib/dates';
 import { useStore, useUI } from '../lib/store';
-import type { Priority, Task } from '../types';
+import type { Priority, Task, TaskType } from '../types';
 import { alpha, C, R, S } from '../theme';
 import { Btn, PriorityBadge } from './ui';
 
 const PRIORITIES: Priority[] = ['critical', 'important', 'normal'];
 const TAGS = ['College', 'Exam', 'Academic', 'Work', 'Errand', 'Habit', 'Personal'];
 const DURATIONS = [15, 30, 45, 60, 90, 120];
+const TASK_TYPES: { id: TaskType; label: string; icon: string }[] = [
+  { id: 'deep_work', label: 'Deep Work', icon: 'flame-outline' },
+  { id: 'quick_task', label: 'Quick Task', icon: 'flash-outline' },
+  { id: 'admin', label: 'Admin', icon: 'briefcase-outline' },
+  { id: 'personal', label: 'Personal', icon: 'person-outline' },
+];
 
 export function TaskSheet({
   visible,
@@ -33,7 +39,7 @@ export function TaskSheet({
   defaultProjectId?: string;
 }) {
   const { state, addTask, updateTask, deleteTask } = useStore();
-  const { openFocusModal } = useUI();
+  const { openFocusModal, openBreakdownModal } = useUI();
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<Priority>('important');
   const [dueDaysOffset, setDueDaysOffset] = useState<number>(0);
@@ -41,10 +47,13 @@ export function TaskSheet({
   const [tag, setTag] = useState('College');
   const [projectId, setProjectId] = useState<string | undefined>(undefined);
   const [estimatedMinutes, setEstimatedMinutes] = useState<number | undefined>(45);
+  const [taskType, setTaskType] = useState<TaskType | undefined>(undefined);
+  const [blockedBy, setBlockedBy] = useState<string[]>([]);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
 
   const projects = state?.projects ?? [];
+  const otherTasks = (state?.tasks ?? []).filter((t) => !t.done && t.id !== initialTask?.id);
 
   useEffect(() => {
     if (visible) {
@@ -54,6 +63,8 @@ export function TaskSheet({
         setTag(initialTask.tag || 'College');
         setProjectId(initialTask.projectId);
         setEstimatedMinutes(initialTask.estimatedMinutes || 45);
+        setTaskType(initialTask.taskType);
+        setBlockedBy(initialTask.blockedBy || []);
         setNote(initialTask.note || '');
         setError('');
       } else {
@@ -64,6 +75,8 @@ export function TaskSheet({
         setTag('College');
         setProjectId(defaultProjectId);
         setEstimatedMinutes(45);
+        setTaskType(undefined);
+        setBlockedBy([]);
         setNote('');
         setError('');
       }
@@ -86,6 +99,8 @@ export function TaskSheet({
         dueTs,
         projectId,
         estimatedMinutes,
+        taskType,
+        blockedBy,
         note: note.trim() || undefined,
       });
     } else {
@@ -96,6 +111,8 @@ export function TaskSheet({
         tag,
         projectId,
         estimatedMinutes,
+        taskType,
+        blockedBy,
         note: note.trim() || undefined,
       });
     }
@@ -409,6 +426,87 @@ export function TaskSheet({
               })}
             </View>
 
+            {/* Optional Task Type */}
+            <Text style={{ color: C.sub, fontSize: 11, fontWeight: '700', letterSpacing: 1, marginTop: 4, marginBottom: 8 }}>
+              WORK TYPE (OPTIONAL)
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: S.m }}>
+              {TASK_TYPES.map((tt) => {
+                const active = taskType === tt.id;
+                return (
+                  <Pressable
+                    key={tt.id}
+                    onPress={() => setTaskType(active ? undefined : tt.id)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 6,
+                      borderRadius: R.pill,
+                      backgroundColor: active ? alpha(C.teal, 0.18) : C.surface2,
+                      borderWidth: 1,
+                      borderColor: active ? C.teal : C.border,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                    }}
+                  >
+                    <Ionicons name={tt.icon as any} size={13} color={active ? C.teal : C.faint} />
+                    <Text
+                      style={{
+                        color: active ? C.teal : C.sub,
+                        fontSize: 12,
+                        fontWeight: active ? '800' : '600',
+                      }}
+                    >
+                      {tt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Optional Dependencies (Blocked By) */}
+            {otherTasks.length > 0 ? (
+              <>
+                <Text style={{ color: C.sub, fontSize: 11, fontWeight: '700', letterSpacing: 1, marginTop: 4, marginBottom: 8 }}>
+                  DEPENDENCIES / BLOCKED BY (OPTIONAL)
+                </Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: S.m }}>
+                  {otherTasks.slice(0, 8).map((ot) => {
+                    const isBlocking = blockedBy.includes(ot.id);
+                    return (
+                      <Pressable
+                        key={ot.id}
+                        onPress={() => {
+                          setBlockedBy((prev) =>
+                            isBlocking ? prev.filter((id) => id !== ot.id) : [...prev, ot.id]
+                          );
+                        }}
+                        style={{
+                          borderRadius: R.pill,
+                          backgroundColor: isBlocking ? alpha(C.red, 0.16) : C.surface2,
+                          borderWidth: 1,
+                          borderColor: isBlocking ? alpha(C.red, 0.5) : C.border,
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: isBlocking ? C.red : C.sub,
+                            fontSize: 12,
+                            fontWeight: isBlocking ? '800' : '600',
+                          }}
+                          numberOfLines={1}
+                        >
+                          {isBlocking ? '🚫 ' : ''}{ot.title}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
+
             {/* Optional Note */}
             <Text style={{ color: C.sub, fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: 6 }}>
               NOTE / DETAILS (OPTIONAL)
@@ -427,9 +525,37 @@ export function TaskSheet({
                 paddingVertical: 10,
                 color: C.text,
                 fontSize: 13.5,
-                marginBottom: S.l,
+                marginBottom: S.m,
               }}
             />
+
+            {/* Smart Breakdown Action */}
+            <Pressable
+              onPress={() => {
+                const query = title.trim() || initialTask?.title || '';
+                openBreakdownModal(query, projectId);
+                onClose();
+              }}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                paddingVertical: 10,
+                paddingHorizontal: 14,
+                borderRadius: R.l,
+                backgroundColor: alpha(C.amber, 0.12),
+                borderWidth: 1,
+                borderColor: alpha(C.amber, 0.35),
+                marginBottom: S.m,
+                opacity: pressed ? 0.8 : 1,
+              })}
+            >
+              <Ionicons name="git-branch-outline" size={16} color={C.amber} />
+              <Text style={{ color: C.amber, fontSize: 13, fontWeight: '700' }}>
+                Break Down into Subtasks
+              </Text>
+            </Pressable>
 
             <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
               {initialTask && !initialTask.done ? (

@@ -32,11 +32,13 @@ import {
   isOverdueDay,
   isToday,
 } from '../lib/dates';
-import { TYPE_META } from '../lib/engine';
+import { searchLifeOS, TYPE_META } from '../lib/engine';
 import { SEED_INPUT } from '../lib/seed';
 import { useStore, useUI } from '../lib/store';
-import type { ScheduleBlock, Task } from '../types';
+import type { ScheduleBlock, SearchFilter, Task } from '../types';
 import { alpha, C, R, S, shadow } from '../theme';
+
+import { WeeklyPlanView } from '../components/WeeklyPlanView';
 
 const EXAMPLES = [
   SEED_INPUT,
@@ -45,11 +47,37 @@ const EXAMPLES = [
 ];
 
 export function PlannerScreen() {
-  const { state, generateSchedule, toggleBlock, toggleTask } = useStore();
-  const { openTask, openFocusModal } = useUI();
-  const [activeTab, setActiveTab] = useState<'tasks' | 'schedule'>('tasks');
+  const {
+    state,
+    generateSchedule,
+    toggleBlock,
+    toggleTask,
+    updateNotificationPreferences,
+    syncExternalCalendar,
+    disconnectCalendar,
+    exportStateData,
+    importStateData,
+    deletePersonalPreference,
+  } = useStore();
+  const { openTask, openFocusModal, openBreakdownModal } = useUI();
+  const [activeTab, setActiveTab] = useState<'tasks' | 'schedule' | 'weekly' | 'settings'>('tasks');
   const [input, setInput] = useState(state?.scheduleInput ?? '');
   const [thinking, setThinking] = useState(false);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFilter, setSearchFilter] = useState<SearchFilter>('all');
+
+  // Export / Import state
+  const [exportedJson, setExportedJson] = useState<string | null>(null);
+  const [importInput, setImportInput] = useState('');
+  const [importFeedback, setImportFeedback] = useState<string | null>(null);
+  const [confirmingImport, setConfirmingImport] = useState(false);
+
+  const searchResults = useMemo(() => {
+    if (!state || !searchQuery.trim()) return { items: [], total: 0 };
+    return searchLifeOS(state, searchQuery.trim(), searchFilter);
+  }, [state, searchQuery, searchFilter]);
 
   const schedule = state?.schedule ?? [];
   const tasks = state?.tasks ?? [];
@@ -221,7 +249,7 @@ export function PlannerScreen() {
               style={{
                 flex: 1,
                 alignItems: 'center',
-                paddingVertical: 8,
+                paddingVertical: 7,
                 borderRadius: R.pill,
                 backgroundColor: activeTab === 'tasks' ? C.amber : 'transparent',
               }}
@@ -230,7 +258,7 @@ export function PlannerScreen() {
                 style={{
                   color: activeTab === 'tasks' ? '#1A1206' : C.sub,
                   fontWeight: '800',
-                  fontSize: 13,
+                  fontSize: 12,
                 }}
               >
                 Tasks ({tasks.filter((t) => !t.done).length})
@@ -242,7 +270,7 @@ export function PlannerScreen() {
               style={{
                 flex: 1,
                 alignItems: 'center',
-                paddingVertical: 8,
+                paddingVertical: 7,
                 borderRadius: R.pill,
                 backgroundColor: activeTab === 'schedule' ? C.violet : 'transparent',
               }}
@@ -251,10 +279,52 @@ export function PlannerScreen() {
                 style={{
                   color: activeTab === 'schedule' ? '#150F24' : C.sub,
                   fontWeight: '800',
-                  fontSize: 13,
+                  fontSize: 12,
                 }}
               >
-                Day Timeline ({schedule.length})
+                Timeline ({schedule.length})
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => setActiveTab('weekly')}
+              style={{
+                flex: 1,
+                alignItems: 'center',
+                paddingVertical: 7,
+                borderRadius: R.pill,
+                backgroundColor: activeTab === 'weekly' ? C.teal : 'transparent',
+              }}
+            >
+              <Text
+                style={{
+                  color: activeTab === 'weekly' ? '#072421' : C.sub,
+                  fontWeight: '800',
+                  fontSize: 12,
+                }}
+              >
+                Weekly
+              </Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => setActiveTab('settings')}
+              style={{
+                flex: 1,
+                alignItems: 'center',
+                paddingVertical: 7,
+                borderRadius: R.pill,
+                backgroundColor: activeTab === 'settings' ? C.blue : 'transparent',
+              }}
+            >
+              <Text
+                style={{
+                  color: activeTab === 'settings' ? '#07182E' : C.sub,
+                  fontWeight: '800',
+                  fontSize: 12,
+                }}
+              >
+                Tools
               </Text>
             </Pressable>
           </View>
@@ -262,41 +332,76 @@ export function PlannerScreen() {
 
         {activeTab === 'tasks' ? (
           <ScrollView
-            contentContainerStyle={{ padding: S.l, paddingBottom: 150 }}
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: S.l, paddingBottom: 170 }}
             showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={true}
+            keyboardShouldPersistTaps="handled"
           >
-            {/* Quick Add Task Button */}
-            <Pressable
-              onPress={() => openTask()}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 10,
-                backgroundColor: alpha(C.amber, 0.12),
-                borderRadius: R.xl,
-                borderWidth: 1.5,
-                borderColor: alpha(C.amber, 0.4),
-                padding: S.m + 2,
-                marginBottom: S.l,
-              }}
-            >
-              <View
+            {/* Quick Actions: Add Task & Breakdown */}
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: S.l }}>
+              <Pressable
+                onPress={() => openTask()}
                 style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 10,
-                  backgroundColor: C.amber,
+                  flex: 1,
+                  flexDirection: 'row',
                   alignItems: 'center',
-                  justifyContent: 'center',
+                  gap: 8,
+                  backgroundColor: alpha(C.amber, 0.12),
+                  borderRadius: R.xl,
+                  borderWidth: 1.5,
+                  borderColor: alpha(C.amber, 0.4),
+                  padding: S.m,
                 }}
               >
-                <Ionicons name="add" size={20} color="#1A1206" />
-              </View>
-              <Text style={{ color: C.amber, fontSize: 14.5, fontWeight: '800', flex: 1 }}>
-                + Add a new prioritized task
-              </Text>
-              <Text style={{ color: C.faint, fontSize: 12, fontWeight: '600' }}>Critical / Important</Text>
-            </Pressable>
+                <View
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 9,
+                    backgroundColor: C.amber,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ionicons name="add" size={18} color="#1A1206" />
+                </View>
+                <Text style={{ color: C.amber, fontSize: 13, fontWeight: '800' }}>
+                  Add Task
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => openBreakdownModal()}
+                style={{
+                  flex: 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8,
+                  backgroundColor: alpha(C.violet, 0.12),
+                  borderRadius: R.xl,
+                  borderWidth: 1.5,
+                  borderColor: alpha(C.violet, 0.4),
+                  padding: S.m,
+                }}
+              >
+                <View
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 9,
+                    backgroundColor: C.violet,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ionicons name="git-branch-outline" size={16} color="#150F24" />
+                </View>
+                <Text style={{ color: C.violet, fontSize: 13, fontWeight: '800' }}>
+                  Break Down
+                </Text>
+              </Pressable>
+            </View>
 
             {/* Overdue Tasks */}
             {taskGroups.overdue.length > 0 ? (
@@ -358,10 +463,12 @@ export function PlannerScreen() {
               </Animated.View>
             ) : null}
           </ScrollView>
-        ) : (
+        ) : activeTab === 'schedule' ? (
           <ScrollView
-            contentContainerStyle={{ padding: S.l, paddingBottom: 150 }}
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: S.l, paddingBottom: 170 }}
             showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={true}
             keyboardShouldPersistTaps="handled"
           >
             {/* Natural Language Day Generator */}
@@ -517,6 +624,488 @@ export function PlannerScreen() {
                 sub="Type what you want to do today above to build a realistic schedule."
               />
             )}
+          </ScrollView>
+        ) : activeTab === 'weekly' ? (
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: S.l, paddingBottom: 170 }}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={true}
+          >
+            <WeeklyPlanView />
+          </ScrollView>
+        ) : (
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: S.l, paddingBottom: 170 }}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={true}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* 1. LOCAL SEARCH */}
+            <Card style={{ marginBottom: S.l }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.m }}>
+                <Ionicons name="search" size={18} color={C.blue} />
+                <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>Local Search</Text>
+              </View>
+              <TextInput
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search tasks, projects, goals, history..."
+                placeholderTextColor={C.faint}
+                style={{
+                  backgroundColor: C.surface2,
+                  borderRadius: R.m,
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                  color: C.text,
+                  fontSize: 14,
+                  borderWidth: 1,
+                  borderColor: C.border,
+                  marginBottom: S.s,
+                }}
+              />
+              {/* Filter chips */}
+              <View style={{ flexDirection: 'row', gap: 6, marginBottom: S.m }}>
+                {(['all', 'tasks', 'projects', 'goals', 'history'] as SearchFilter[]).map((f) => (
+                  <Pressable
+                    key={f}
+                    onPress={() => setSearchFilter(f)}
+                    style={{
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                      borderRadius: R.pill,
+                      backgroundColor: searchFilter === f ? alpha(C.blue, 0.25) : C.surface2,
+                      borderWidth: 1,
+                      borderColor: searchFilter === f ? C.blue : C.border,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: searchFilter === f ? C.blue : C.faint,
+                        fontSize: 11,
+                        fontWeight: '700',
+                        textTransform: 'capitalize',
+                      }}
+                    >
+                      {f}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {searchQuery.trim() ? (
+                searchResults.items.length > 0 ? (
+                  <View style={{ gap: 8 }}>
+                    {searchResults.items.slice(0, 8).map((item) => (
+                      <View
+                        key={`${item.category}-${item.id}`}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: 10,
+                          borderRadius: R.m,
+                          backgroundColor: C.surface2,
+                        }}
+                      >
+                        <View
+                          style={{
+                            paddingHorizontal: 6,
+                            paddingVertical: 3,
+                            borderRadius: 4,
+                            backgroundColor: alpha(C.blue, 0.2),
+                          }}
+                        >
+                          <Text style={{ color: C.blue, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>
+                            {item.category}
+                          </Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }} numberOfLines={1}>
+                            {item.title}
+                          </Text>
+                          {item.subtitle ? (
+                            <Text style={{ color: C.faint, fontSize: 11 }} numberOfLines={1}>
+                              {item.subtitle}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={{ color: C.faint, fontSize: 12, fontStyle: 'italic' }}>
+                    No results found for "{searchQuery}".
+                  </Text>
+                )
+              ) : null}
+            </Card>
+
+            {/* 2. NOTIFICATION CENTER */}
+            <Card style={{ marginBottom: S.l }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: S.m }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="notifications-outline" size={18} color={C.amber} />
+                  <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>Notification Center</Text>
+                </View>
+                <Pressable
+                  onPress={() =>
+                    updateNotificationPreferences({
+                      enabled: !state?.notificationPreferences?.enabled,
+                    })
+                  }
+                  style={{
+                    paddingHorizontal: 12,
+                    paddingVertical: 5,
+                    borderRadius: R.pill,
+                    backgroundColor: state?.notificationPreferences?.enabled
+                      ? alpha(C.green, 0.2)
+                      : alpha(C.red, 0.2),
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: state?.notificationPreferences?.enabled ? C.green : C.red,
+                      fontWeight: '800',
+                      fontSize: 12,
+                    }}
+                  >
+                    {state?.notificationPreferences?.enabled ? 'ENABLED' : 'DISABLED'}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View style={{ gap: 8 }}>
+                {[
+                  {
+                    key: 'taskReminders' as const,
+                    label: 'Task Reminders',
+                    sub: 'Alerts at planned times or before deadlines',
+                  },
+                  {
+                    key: 'deadlineReminders' as const,
+                    label: 'Deadline Reminders',
+                    sub: 'Advance warnings for approaching due dates',
+                  },
+                  {
+                    key: 'routineReminders' as const,
+                    label: 'Routine Reminders',
+                    sub: 'Prompt morning and evening launch routines',
+                  },
+                  {
+                    key: 'weeklyReviewReminder' as const,
+                    label: 'Weekly Review',
+                    sub: 'Sunday evening review prompt',
+                  },
+                ].map((item) => {
+                  const active = !!state?.notificationPreferences?.[item.key];
+                  return (
+                    <Pressable
+                      key={item.key}
+                      onPress={() =>
+                        updateNotificationPreferences({
+                          [item.key]: !active,
+                        })
+                      }
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: 10,
+                        borderRadius: R.m,
+                        backgroundColor: C.surface2,
+                      }}
+                    >
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <Text style={{ color: C.text, fontSize: 13, fontWeight: '700' }}>{item.label}</Text>
+                        <Text style={{ color: C.faint, fontSize: 11 }}>{item.sub}</Text>
+                      </View>
+                      <Ionicons
+                        name={active ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={20}
+                        color={active ? C.green : C.faint}
+                      />
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <View
+                style={{
+                  marginTop: S.m,
+                  padding: 10,
+                  borderRadius: R.m,
+                  backgroundColor: alpha(C.violet, 0.12),
+                  borderWidth: 1,
+                  borderColor: alpha(C.violet, 0.25),
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="moon-outline" size={14} color={C.violet} />
+                  <Text style={{ color: C.violet, fontSize: 12, fontWeight: '800' }}>
+                    Quiet Hours: 22:30 → 07:00
+                  </Text>
+                </View>
+                <Text style={{ color: C.sub, fontSize: 11, marginTop: 3 }}>
+                  Non-urgent notifications scheduled during quiet hours are delayed until morning.
+                </Text>
+              </View>
+            </Card>
+
+            {/* 3. CALENDAR INTEGRATION */}
+            <Card style={{ marginBottom: S.l }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: S.m }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="calendar-outline" size={18} color={C.teal} />
+                  <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>External Calendar</Text>
+                </View>
+                <View
+                  style={{
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: R.pill,
+                    backgroundColor:
+                      state?.calendarSync?.status === 'synced'
+                        ? alpha(C.green, 0.2)
+                        : alpha(C.faint, 0.2),
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: state?.calendarSync?.status === 'synced' ? C.green : C.faint,
+                      fontSize: 11,
+                      fontWeight: '800',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    {state?.calendarSync?.status ?? 'NEVER SYNCED'}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={{ color: C.sub, fontSize: 12, marginBottom: S.m }}>
+                External calendar events import as read-only commitments. They reduce usable time and guide recommendations, but LifeOS will never modify or delete them.
+              </Text>
+
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: S.m }}>
+                <Btn
+                  title="Import Events"
+                  variant="secondary"
+                  size="small"
+                  icon="download-outline"
+                  onPress={() => {
+                    const sampleEvents = [
+                      {
+                        id: 'dept-meeting',
+                        calendarId: 'default',
+                        title: 'Department Sync',
+                        start: 11 * 60,
+                        end: 12 * 60,
+                      },
+                      {
+                        id: 'office-hours',
+                        calendarId: 'default',
+                        title: 'Faculty Office Hours',
+                        start: 15 * 60,
+                        end: 16 * 60,
+                      },
+                    ];
+                    syncExternalCalendar(sampleEvents, 'Device Calendar');
+                  }}
+                />
+                {state?.calendarSync?.status === 'synced' ? (
+                  <Btn
+                    title="Disconnect"
+                    variant="ghost"
+                    size="small"
+                    onPress={() => disconnectCalendar()}
+                  />
+                ) : null}
+              </View>
+
+              <Text style={{ color: C.faint, fontSize: 11 }}>
+                Events imported: {(state?.externalCalendarEvents ?? []).length}
+                {state?.calendarSync?.lastSyncedAt
+                  ? ` • Last synced: ${fmtDateShort(state.calendarSync.lastSyncedAt)}`
+                  : ''}
+              </Text>
+            </Card>
+
+            {/* 4. DATA EXPORT & IMPORT */}
+            <Card style={{ marginBottom: S.l }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.m }}>
+                <Ionicons name="cloud-download-outline" size={18} color={C.green} />
+                <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>Backup & Restore</Text>
+              </View>
+
+              <Text style={{ color: C.sub, fontSize: 12, marginBottom: S.m }}>
+                Export your complete LifeOS state to human-readable JSON, or restore from a previous backup safely.
+              </Text>
+
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: S.m }}>
+                <Btn
+                  title="Export JSON"
+                  variant="secondary"
+                  size="small"
+                  icon="share-outline"
+                  onPress={() => {
+                    const data = exportStateData();
+                    setExportedJson(data);
+                  }}
+                />
+              </View>
+
+              {exportedJson ? (
+                <View style={{ marginBottom: S.m }}>
+                  <Text style={{ color: C.faint, fontSize: 10, fontWeight: '700', marginBottom: 4 }}>
+                    EXPORTED STATE JSON (READ-ONLY)
+                  </Text>
+                  <TextInput
+                    value={exportedJson}
+                    editable={false}
+                    multiline
+                    numberOfLines={4}
+                    style={{
+                      backgroundColor: C.surface2,
+                      borderRadius: R.m,
+                      padding: 8,
+                      color: C.faint,
+                      fontSize: 10,
+                      maxHeight: 120,
+                    }}
+                  />
+                </View>
+              ) : null}
+
+              {/* Import Section */}
+              <View style={{ marginTop: S.s }}>
+                <Text style={{ color: C.text, fontSize: 13, fontWeight: '700', marginBottom: 6 }}>
+                  Restore Backup
+                </Text>
+                <TextInput
+                  value={importInput}
+                  onChangeText={(t) => {
+                    setImportInput(t);
+                    setImportFeedback(null);
+                  }}
+                  placeholder="Paste exported JSON here to restore..."
+                  placeholderTextColor={C.faint}
+                  multiline
+                  numberOfLines={3}
+                  style={{
+                    backgroundColor: C.surface2,
+                    borderRadius: R.m,
+                    padding: 8,
+                    color: C.text,
+                    fontSize: 11,
+                    maxHeight: 100,
+                    borderWidth: 1,
+                    borderColor: C.border,
+                    marginBottom: S.s,
+                  }}
+                />
+
+                {confirmingImport ? (
+                  <View
+                    style={{
+                      padding: 12,
+                      borderRadius: R.m,
+                      backgroundColor: alpha(C.red, 0.15),
+                      borderWidth: 1,
+                      borderColor: alpha(C.red, 0.3),
+                      marginBottom: S.s,
+                    }}
+                  >
+                    <Text style={{ color: C.red, fontWeight: '800', fontSize: 12 }}>
+                      Replace LifeOS data?
+                    </Text>
+                    <Text style={{ color: C.sub, fontSize: 11, marginVertical: 4 }}>
+                      Existing data will be replaced. In-memory backup protects against malformed state.
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                      <Btn
+                        title="Confirm Replace"
+                        variant="primary"
+                        size="small"
+                        onPress={() => {
+                          const res = importStateData(importInput, 'replace');
+                          setConfirmingImport(false);
+                          if (res.success) {
+                            setImportFeedback('Data successfully restored!');
+                            setImportInput('');
+                          } else {
+                            setImportFeedback(res.error || 'Import failed.');
+                          }
+                        }}
+                      />
+                      <Btn
+                        title="Cancel"
+                        variant="ghost"
+                        size="small"
+                        onPress={() => setConfirmingImport(false)}
+                      />
+                    </View>
+                  </View>
+                ) : (
+                  <Btn
+                    title="Import JSON"
+                    variant="secondary"
+                    size="small"
+                    onPress={() => {
+                      if (!importInput.trim()) return;
+                      setConfirmingImport(true);
+                    }}
+                  />
+                )}
+
+                {importFeedback ? (
+                  <Text
+                    style={{
+                      marginTop: 6,
+                      fontSize: 12,
+                      fontWeight: '700',
+                      color: importFeedback.includes('successfully') ? C.green : C.red,
+                    }}
+                  >
+                    {importFeedback}
+                  </Text>
+                ) : null}
+              </View>
+            </Card>
+
+            {/* 5. PERSONAL MEMORY */}
+            {(state?.personalPreferences ?? []).length > 0 ? (
+              <Card style={{ marginBottom: S.l }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: S.m }}>
+                  <Ionicons name="finger-print-outline" size={18} color={C.violet} />
+                  <Text style={{ color: C.text, fontSize: 15, fontWeight: '800' }}>What LifeOS Knows</Text>
+                </View>
+                <View style={{ gap: 6 }}>
+                  {state?.personalPreferences?.map((p) => (
+                    <View
+                      key={p.id}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: 8,
+                        borderRadius: R.m,
+                        backgroundColor: C.surface2,
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: C.text, fontSize: 12, fontWeight: '700' }}>{p.key}</Text>
+                        <Text style={{ color: C.faint, fontSize: 11 }}>{p.value}</Text>
+                      </View>
+                      <Pressable onPress={() => deletePersonalPreference(p.id)} hitSlop={8}>
+                        <Ionicons name="trash-outline" size={16} color={C.red} />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              </Card>
+            ) : null}
           </ScrollView>
         )}
 

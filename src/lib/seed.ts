@@ -1,9 +1,39 @@
-import type { AppState, DailyReview, Expense, FocusSession, Habit, HabitCompletion, Project, Reminder, Task } from '../types';
+import type {
+  AppState,
+  DailyReview,
+  DecisionRecord,
+  Expense,
+  FocusSession,
+  Goal,
+  Habit,
+  HabitCompletion,
+  PersonalPreference,
+  Project,
+  RecurringTask,
+  Reminder,
+  Routine,
+  Task,
+  TaskTemplate,
+} from '../types';
 import { atTime, localDateKey, shiftDateKey, uid } from './dates';
 import { buildSchedule, parsePlan } from './engine';
 
 export const SEED_INPUT =
   'I have college at 10, need to study 3 hours, buy groceries and finish my assignment.';
+
+function seedGoals(): Goal[] {
+  return [
+    {
+      id: 'goal-internship',
+      title: 'Become Internship-Ready',
+      description: 'Strengthen digital electronics foundations, finish campus capstone, and prepare resume',
+      status: 'active',
+      targetDate: Date.now() + 60 * 86400000,
+      projectIds: ['proj-vlsi', 'proj-capstone'],
+      createdAt: Date.now() - 15 * 86400000,
+    },
+  ];
+}
 
 function seedProjects(): Project[] {
   return [
@@ -17,6 +47,7 @@ function seedProjects(): Project[] {
       deadline: atTime(6, 18 * 60), // Due in 6 days
       color: '#60A5FA',
       icon: 'hardware-chip-outline',
+      goalId: 'goal-internship',
     },
     {
       id: 'proj-capstone',
@@ -28,6 +59,7 @@ function seedProjects(): Project[] {
       deadline: atTime(14, 17 * 60), // Due in 14 days
       color: '#A78BFA',
       icon: 'school-outline',
+      goalId: 'goal-internship',
     },
   ];
 }
@@ -334,6 +366,115 @@ function seedDailyReviews(): DailyReview[] {
   ];
 }
 
+function seedRecurringTasks(): RecurringTask[] {
+  return [
+    {
+      id: 'rec-1',
+      title: 'Review lecture notes & formulas',
+      recurrence: 'weekdays',
+      priority: 'important',
+      estimatedMinutes: 30,
+      projectId: 'proj-vlsi',
+      tag: 'Academics',
+      active: true,
+      createdAt: Date.now() - 7 * 86400000,
+    },
+    {
+      id: 'rec-2',
+      title: 'Weekly project progress review',
+      recurrence: 'weekly',
+      dayOfWeek: 0, // Sunday
+      priority: 'normal',
+      estimatedMinutes: 45,
+      active: true,
+      createdAt: Date.now() - 14 * 86400000,
+    },
+    {
+      id: 'rec-3',
+      title: 'Monthly subscription & bill audit',
+      recurrence: 'monthly',
+      dayOfMonth: 1,
+      priority: 'normal',
+      estimatedMinutes: 20,
+      active: true,
+      createdAt: Date.now() - 30 * 86400000,
+    },
+  ];
+}
+
+function seedRoutines(): Routine[] {
+  return [
+    {
+      id: 'routine-morning-launch',
+      title: 'Morning Launch Routine',
+      description: 'Prepare for high-leverage deep work sessions',
+      active: true,
+      preferredTimeMinutes: 8 * 60 + 30,
+      category: 'morning',
+      items: [
+        { id: uid(), title: 'Hydrate & 10m stretch', durationMinutes: 10, type: 'fitness' },
+        { id: uid(), title: 'Review Today & Next Move', durationMinutes: 15, type: 'generic' },
+        { id: uid(), title: 'Deep Work Sprint (60m)', durationMinutes: 60, type: 'study', taskType: 'deep_work' },
+      ],
+      createdAt: Date.now() - 10 * 86400000,
+    },
+  ];
+}
+
+function seedPersonalPreferences(): PersonalPreference[] {
+  return [
+    {
+      id: 'pref-deep-work',
+      key: 'preferred_deep_work_window',
+      value: '09:00 - 12:00',
+      source: 'user',
+      createdAt: Date.now() - 14 * 86400000,
+      updatedAt: Date.now() - 14 * 86400000,
+    },
+    {
+      id: 'pref-review-day',
+      key: 'preferred_review_day',
+      value: 'Sunday',
+      source: 'user',
+      createdAt: Date.now() - 14 * 86400000,
+      updatedAt: Date.now() - 14 * 86400000,
+    },
+  ];
+}
+
+function seedTaskTemplates(): TaskTemplate[] {
+  return [
+    {
+      id: 'tmpl-lab-report',
+      title: 'Lab Experiment & Report',
+      description: 'Standard technical report breakdown for engineering labs',
+      category: 'Academics',
+      items: [
+        { title: 'Read experiment theory & manual', estimatedMinutes: 20, priority: 'normal', taskType: 'quick_task' },
+        { title: 'Collect & record observations', estimatedMinutes: 30, priority: 'normal', taskType: 'deep_work' },
+        { title: 'Simulate waveforms / calculate results', estimatedMinutes: 45, priority: 'important', taskType: 'deep_work' },
+        { title: 'Write discussion & conclusion', estimatedMinutes: 30, priority: 'normal', taskType: 'admin' },
+      ],
+      createdAt: Date.now() - 12 * 86400000,
+    },
+  ];
+}
+
+function seedDecisionRecords(): DecisionRecord[] {
+  return [
+    {
+      id: 'rec-dec-1',
+      timestamp: Date.now() - 86400000,
+      type: 'next_action',
+      subjectId: 'task-seed-1',
+      subjectTitle: 'Revise Ch. 3 — Sequential Circuits',
+      reasons: ['Due today', 'Unblocked', 'Matches active VLSI Training project'],
+      actionTaken: 'started',
+      outcome: 'completed',
+    },
+  ];
+}
+
 export function makeSeed(): AppState {
   return {
     name: 'Aarav',
@@ -357,5 +498,47 @@ export function makeSeed(): AppState {
     reportStreak: 6,
     workDayStart: 9 * 60, // 09:00
     workDayEnd: 21 * 60, // 21:00
+    planningPreferences: {
+      deepWorkWindow: { start: 9 * 60, end: 12 * 60 },
+      lightWorkWindow: { start: 14 * 60, end: 17 * 60 },
+      personalWindow: { start: 19 * 60, end: 24 * 60 },
+      useHistoricalEstimateAdjustment: false,
+    },
+    adaptiveProposals: [],
+    weeklyPlanConfirmed: false,
+    goals: seedGoals(),
+    recurringTasks: seedRecurringTasks(),
+    routines: seedRoutines(),
+    personalPreferences: seedPersonalPreferences(),
+    decisionRecords: seedDecisionRecords(),
+    taskTemplates: seedTaskTemplates(),
+    notificationPreferences: {
+      enabled: true,
+      taskReminders: true,
+      deadlineReminders: true,
+      routineReminders: true,
+      weeklyReviewReminder: true,
+      quietHours: {
+        start: 22 * 60 + 30, // 22:30
+        end: 7 * 60,         // 07:00
+      },
+    },
+    localNotifications: [],
+    calendarSync: {
+      status: 'synced',
+      lastSyncedAt: Date.now() - 3600000,
+      importedEventCount: 1,
+      connectedCalendarName: 'College & Academic Calendar',
+    },
+    externalCalendarEvents: [
+      {
+        id: 'evt-ece-lab',
+        calendarId: 'cal-academic',
+        title: 'ECE Department Lab Session',
+        start: Date.now() + 2 * 3600000,
+        end: Date.now() + 3.5 * 3600000,
+        location: 'VLSI Lab 302',
+      },
+    ],
   };
 }

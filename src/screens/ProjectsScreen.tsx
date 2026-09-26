@@ -24,14 +24,14 @@ import {
   SectionHeader,
 } from '../components/ui';
 import { dueLabel, fmtDateShort } from '../lib/dates';
-import { getProjectStats } from '../lib/engine';
+import { getProjectStats, getProjectDeadlinePressure } from '../lib/engine';
 import { useStore, useUI } from '../lib/store';
 import type { Project, ProjectStatus, Task } from '../types';
 import { alpha, C, R, S, shadow } from '../theme';
 
 export function ProjectsScreen() {
   const { state, toggleTask, archiveProject, updateProject } = useStore();
-  const { openProject, openTask, openFocusModal } = useUI();
+  const { openProject, openTask, openFocusModal, openBreakdownModal } = useUI();
   const [filter, setFilter] = useState<'active' | 'all' | 'archived'>('active');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
@@ -137,8 +137,11 @@ export function ProjectsScreen() {
       <FlatList
         data={filteredProjects}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={{ padding: S.l, paddingBottom: 150 }}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: S.l, paddingBottom: 170 }}
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled={true}
+        keyboardShouldPersistTaps="handled"
         ListEmptyComponent={
           <EmptyState
             icon="folder-open-outline"
@@ -212,28 +215,55 @@ export function ProjectsScreen() {
                 </View>
 
                 {/* Footer Info: Deadline & Status */}
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginTop: S.m,
-                    paddingTop: S.s,
-                    borderTopWidth: 1,
-                    borderTopColor: C.border,
-                  }}
-                >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="time-outline" size={14} color={C.faint} />
-                    <Text style={{ color: C.sub, fontSize: 12 }}>
-                      {item.deadline ? dueLabel(item.deadline) : 'No deadline'}
-                    </Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <Text style={{ color: C.amber, fontSize: 12, fontWeight: '700' }}>Open Details</Text>
-                    <Ionicons name="chevron-forward" size={14} color={C.amber} />
-                  </View>
-                </View>
+                {(() => {
+                  const pressure = getProjectDeadlinePressure(item, tasks);
+                  return (
+                    <>
+                      {item.deadline && pressure ? (
+                        <View style={{ marginTop: 8, paddingHorizontal: 2, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Ionicons
+                            name={pressure.isPressureHigh ? 'warning' : 'information-circle-outline'}
+                            size={13}
+                            color={pressure.isPressureHigh ? C.amber : C.faint}
+                          />
+                          <Text
+                            style={{
+                              color: pressure.isPressureHigh ? C.amber : C.faint,
+                              fontSize: 11,
+                              fontWeight: '600',
+                              flex: 1,
+                            }}
+                            numberOfLines={1}
+                          >
+                            {pressure.statusText}
+                          </Text>
+                        </View>
+                      ) : null}
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginTop: S.m,
+                          paddingTop: S.s,
+                          borderTopWidth: 1,
+                          borderTopColor: C.border,
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Ionicons name="time-outline" size={14} color={C.faint} />
+                          <Text style={{ color: C.sub, fontSize: 12 }}>
+                            {item.deadline ? dueLabel(item.deadline) : 'No deadline'}
+                          </Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Text style={{ color: C.amber, fontSize: 12, fontWeight: '700' }}>Open Details</Text>
+                          <Ionicons name="chevron-forward" size={14} color={C.amber} />
+                        </View>
+                      </View>
+                    </>
+                  );
+                })()}
               </Card>
             </Animated.View>
           );
@@ -293,8 +323,11 @@ export function ProjectsScreen() {
               </View>
 
               <ScrollView
-                contentContainerStyle={{ padding: S.l, paddingBottom: 60 }}
+                style={{ flex: 1 }}
+                contentContainerStyle={{ padding: S.l, paddingBottom: 80 }}
                 showsVerticalScrollIndicator={false}
+                nestedScrollEnabled={true}
+                keyboardShouldPersistTaps="handled"
               >
                 {/* Project Header Card */}
                 <Card style={{ borderColor: alpha(selectedProject.color || C.blue, 0.4) }}>
@@ -337,6 +370,67 @@ export function ProjectsScreen() {
                   </View>
                 </Card>
 
+                {/* Deadline Intelligence Card */}
+                {(() => {
+                  const dp = selectedProject.deadline ? getProjectDeadlinePressure(selectedProject, tasks) : null;
+                  if (!dp) return null;
+                  const fmtM = (m: number) => (m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60 > 0 ? `${m % 60}m` : ''}`.trim());
+                  return (
+                    <Card style={{ marginTop: S.m, borderColor: alpha(dp.isPressureHigh ? C.amber : C.teal, 0.3) }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                        <Ionicons
+                          name="speedometer-outline"
+                          size={16}
+                          color={dp.isPressureHigh ? C.amber : C.teal}
+                        />
+                        <Text style={{ color: C.text, fontSize: 13, fontWeight: '800' }}>
+                          DEADLINE INTELLIGENCE
+                        </Text>
+                      </View>
+
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginVertical: 4 }}>
+                        <View>
+                          <Text style={{ color: C.faint, fontSize: 11, fontWeight: '700' }}>REMAINING</Text>
+                          <Text style={{ color: C.text, fontSize: 15, fontWeight: '800', marginTop: 2 }}>
+                            {dp.remainingTasksCount} {dp.remainingTasksCount === 1 ? 'task' : 'tasks'}
+                          </Text>
+                        </View>
+                        <View>
+                          <Text style={{ color: C.faint, fontSize: 11, fontWeight: '700' }}>EST. WORK</Text>
+                          <Text style={{ color: C.text, fontSize: 15, fontWeight: '800', marginTop: 2 }}>
+                            ~{fmtM(dp.estimatedRemainingMinutes)}
+                          </Text>
+                        </View>
+                        <View>
+                          <Text style={{ color: C.faint, fontSize: 11, fontWeight: '700' }}>USABLE TIME</Text>
+                          <Text style={{ color: C.text, fontSize: 15, fontWeight: '800', marginTop: 2 }}>
+                            ~{fmtM(dp.availableUsableMinutes)}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View
+                        style={{
+                          marginTop: 8,
+                          paddingTop: 8,
+                          borderTopWidth: 1,
+                          borderTopColor: C.border,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: dp.isPressureHigh ? C.amber : C.sub,
+                            fontSize: 12,
+                            fontWeight: '600',
+                          }}
+                        >
+                          {dp.statusText}
+                        </Text>
+                      </View>
+                    </Card>
+                  );
+                })()}
+
                 {/* Action Bar */}
                 <View style={{ flexDirection: 'row', gap: 10, marginTop: S.m }}>
                   <Btn
@@ -344,6 +438,13 @@ export function ProjectsScreen() {
                     icon="add"
                     onPress={() => openTask(undefined, selectedProject.id)}
                     style={{ flex: 1 }}
+                  />
+                  <Btn
+                    title="Break Down"
+                    variant="ghost"
+                    icon="git-branch-outline"
+                    onPress={() => openBreakdownModal(selectedProject.name, selectedProject.id)}
+                    compact
                   />
                   {selectedProject.status !== 'archived' ? (
                     <Btn

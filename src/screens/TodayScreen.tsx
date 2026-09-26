@@ -26,9 +26,12 @@ import {
   useNow,
 } from '../lib/dates';
 import {
+  calculateDayStatus,
+  getCurrentScheduleContext,
   getEveningReviewSnapshot,
   getLifeOSRadar,
   getMorningBrief,
+  getProjectDeadlinePressure,
   getProjectsNeedingAttention,
   getProjectStats,
   getTodayHabitsSummary,
@@ -67,6 +70,7 @@ export function TodayScreen({ navigation }: { navigation: any }) {
     openHabitSheet,
     openReviewModal,
     openHabitsModal,
+    openRescheduleModal,
   } = useUI();
   const now = useNow(30000);
   const [briefDismissed, setBriefDismissed] = useState(false);
@@ -95,6 +99,14 @@ export function TodayScreen({ navigation }: { navigation: any }) {
     [state]
   );
   const eveningSnapshot = useMemo(() => (state ? getEveningReviewSnapshot(state) : null), [state]);
+  const { dayStatus, proposals } = useMemo(
+    () => (state ? calculateDayStatus(state, now) : { dayStatus: null, proposals: [] }),
+    [state, now]
+  );
+  const scheduleContext = useMemo(
+    () => (state ? getCurrentScheduleContext(state.schedule ?? [], now) : null),
+    [state?.schedule, now]
+  );
 
   if (!state || !money) return <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} />;
 
@@ -133,8 +145,11 @@ export function TodayScreen({ navigation }: { navigation: any }) {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
       <ScrollView
-        contentContainerStyle={{ padding: S.l, paddingBottom: 130 }}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: S.l, paddingBottom: 170 }}
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled={true}
+        keyboardShouldPersistTaps="handled"
       >
         {/* 1. TODAY HEADER & MORNING BRIEF */}
         <Animated.View entering={FadeInDown.springify()} style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -529,24 +544,45 @@ export function TodayScreen({ navigation }: { navigation: any }) {
               {/* Action buttons */}
               <View style={{ flexDirection: 'row', gap: 10, marginTop: S.m }}>
                 {whatNow.taskId ? (
-                  <>
-                    <Btn
-                      variant="primary"
-                      icon="flash-outline"
-                      onPress={() => openFocusModal(whatNow.taskId)}
-                      style={{ flex: 2, backgroundColor: C.violet }}
-                    >
-                      START FOCUS
-                    </Btn>
-                    <Btn
-                      variant="secondary"
-                      icon="checkmark"
-                      onPress={() => toggleTask(whatNow.taskId!)}
-                      style={{ flex: 1 }}
-                    >
-                      Done
-                    </Btn>
-                  </>
+                  state.activeTaskId === whatNow.taskId ? (
+                    <>
+                      <Btn
+                        variant="primary"
+                        icon="checkmark-done"
+                        onPress={completeActiveTask}
+                        style={{ flex: 2, backgroundColor: C.green }}
+                      >
+                        DONE ({activeElapsedMins}m)
+                      </Btn>
+                      <Btn
+                        variant="secondary"
+                        icon={isPaused ? 'play-outline' : 'pause-outline'}
+                        onPress={isPaused ? resumeTask : pauseTask}
+                        style={{ flex: 1 }}
+                      >
+                        {isPaused ? 'Resume' : 'Pause'}
+                      </Btn>
+                    </>
+                  ) : (
+                    <>
+                      <Btn
+                        variant="primary"
+                        icon="flash-outline"
+                        onPress={() => startTask(whatNow.taskId!)}
+                        style={{ flex: 2, backgroundColor: C.violet }}
+                      >
+                        START FOCUS
+                      </Btn>
+                      <Btn
+                        variant="secondary"
+                        icon="checkmark"
+                        onPress={() => toggleTask(whatNow.taskId!)}
+                        style={{ flex: 1 }}
+                      >
+                        Done
+                      </Btn>
+                    </>
+                  )
                 ) : whatNow.blockId ? (
                   <Btn
                     variant="primary"
@@ -571,7 +607,214 @@ export function TodayScreen({ navigation }: { navigation: any }) {
           </Animated.View>
         ) : null}
 
-        {/* 4. ATTENTION / RADAR */}
+        {/* 3B. TODAY EXECUTION TIMELINE */}
+        {scheduleContext &&
+        (scheduleContext.currentBlock ||
+          scheduleContext.nextBlock ||
+          scheduleContext.pastBlocks.length > 0 ||
+          scheduleContext.upcomingBlocks.length > 0) ? (
+          <Animated.View entering={FadeInDown.delay(110).springify()} style={{ marginTop: S.m }}>
+            <Card style={{ padding: S.m }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="time-outline" size={16} color={C.teal} />
+                  <Label style={{ color: C.teal, fontWeight: '800', letterSpacing: 0.8 }}>
+                    EXECUTION TIMELINE
+                  </Label>
+                </View>
+                <Chip color={scheduleContext.status === 'in_block' ? C.green : C.teal}>
+                  <Text style={{ color: scheduleContext.status === 'in_block' ? C.green : C.teal, fontSize: 11, fontWeight: '700' }}>
+                    {scheduleContext.status === 'in_block' ? 'In Progress' : `${scheduleContext.availableMinutes}m free window`}
+                  </Text>
+                </Chip>
+              </View>
+
+              {/* Current Block if present */}
+              {scheduleContext.currentBlock ? (
+                <View
+                  style={{
+                    backgroundColor: alpha(C.green, 0.1),
+                    borderWidth: 1,
+                    borderColor: alpha(C.green, 0.35),
+                    borderRadius: R.m,
+                    padding: 10,
+                    marginBottom: 8,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={{ color: C.green, fontSize: 11, fontWeight: '800' }}>CURRENT</Text>
+                    <Text style={{ color: C.green, fontSize: 11, fontWeight: '700' }}>
+                      {fmtTime(scheduleContext.currentBlock.start)} – {fmtTime(scheduleContext.currentBlock.end)}
+                    </Text>
+                  </View>
+                  <Text style={{ color: C.text, fontSize: 14, fontWeight: '800', marginTop: 3 }}>
+                    {scheduleContext.currentBlock.title}
+                  </Text>
+                  {scheduleContext.currentBlock.source === 'external' ? (
+                    <Text style={{ color: C.blue, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                      External commitment (read-only)
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {/* Next Block if present */}
+              {scheduleContext.nextBlock ? (
+                <View
+                  style={{
+                    backgroundColor: alpha(C.blue, 0.08),
+                    borderWidth: 1,
+                    borderColor: alpha(C.blue, 0.3),
+                    borderRadius: R.m,
+                    padding: 10,
+                    marginBottom: 8,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={{ color: C.blue, fontSize: 11, fontWeight: '800' }}>NEXT</Text>
+                    <Text style={{ color: C.blue, fontSize: 11, fontWeight: '700' }}>
+                      {fmtTime(scheduleContext.nextBlock.start)} – {fmtTime(scheduleContext.nextBlock.end)}
+                    </Text>
+                  </View>
+                  <Text style={{ color: C.text, fontSize: 14, fontWeight: '700', marginTop: 3 }}>
+                    {scheduleContext.nextBlock.title}
+                  </Text>
+                  {scheduleContext.nextBlock.source === 'external' ? (
+                    <Text style={{ color: C.blue, fontSize: 11, fontWeight: '600', marginTop: 2 }}>
+                      External commitment
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {/* Past blocks summary */}
+              {scheduleContext.pastBlocks.length > 0 ? (
+                <View style={{ marginTop: 4 }}>
+                  <Text style={{ color: C.faint, fontSize: 11, fontWeight: '700', marginBottom: 4 }}>PAST TODAY</Text>
+                  {scheduleContext.pastBlocks.slice(-2).map((b) => (
+                    <View key={b.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons
+                          name={b.done ? 'checkmark-circle' : 'close-circle-outline'}
+                          size={14}
+                          color={b.done ? C.green : C.faint}
+                        />
+                        <Text style={{ color: b.done ? C.faint : C.text, fontSize: 12.5, textDecorationLine: b.done ? 'line-through' : 'none' }}>
+                          {b.title}
+                        </Text>
+                      </View>
+                      <Text style={{ color: C.faint, fontSize: 11 }}>
+                        {fmtTime(b.start)}–{fmtTime(b.end)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </Card>
+          </Animated.View>
+        ) : null}
+        
+        {/* 4. ADAPTIVE DAY STATUS */}
+        {dayStatus && (
+          <Animated.View entering={FadeInDown.delay(120).springify()} style={{ marginTop: S.m }}>
+            <Card
+              style={{
+                backgroundColor:
+                  dayStatus.state === 'shifted'
+                    ? alpha(C.amber, 0.08)
+                    : dayStatus.state === 'on_track'
+                    ? alpha(C.green, 0.08)
+                    : C.surface,
+                borderColor:
+                  dayStatus.state === 'shifted'
+                    ? alpha(C.amber, 0.4)
+                    : dayStatus.state === 'on_track'
+                    ? alpha(C.green, 0.4)
+                    : C.border2,
+                padding: S.m,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons
+                    name={
+                      dayStatus.state === 'shifted'
+                        ? 'alert-circle-outline'
+                        : dayStatus.state === 'on_track'
+                        ? 'checkmark-done-circle-outline'
+                        : 'compass-outline'
+                    }
+                    size={16}
+                    color={
+                      dayStatus.state === 'shifted'
+                        ? C.amber
+                        : dayStatus.state === 'on_track'
+                        ? C.green
+                        : C.teal
+                    }
+                  />
+                  <Label
+                    style={{
+                      color:
+                        dayStatus.state === 'shifted'
+                          ? C.amber
+                          : dayStatus.state === 'on_track'
+                          ? C.green
+                          : C.teal,
+                      fontWeight: '800',
+                      letterSpacing: 0.8,
+                    }}
+                  >
+                    {dayStatus.headline}
+                  </Label>
+                </View>
+
+                {proposals.length > 0 && (
+                  <Chip color={C.amber}>
+                    <Text style={{ color: C.amber, fontSize: 11, fontWeight: '700' }}>
+                      {proposals.length} adjustment{proposals.length > 1 ? 's' : ''} proposed
+                    </Text>
+                  </Chip>
+                )}
+              </View>
+
+              <Text style={{ color: C.text, fontSize: 14, fontWeight: '700' }}>
+                {dayStatus.summary}
+              </Text>
+              <Text style={{ color: C.sub, fontSize: 12.5, lineHeight: 17, marginTop: 3 }}>
+                {dayStatus.explanation}
+              </Text>
+
+              {proposals.length > 0 ? (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginTop: 10,
+                    paddingTop: 8,
+                    borderTopWidth: 1,
+                    borderTopColor: alpha(C.amber, 0.25),
+                  }}
+                >
+                  <Text style={{ color: C.faint, fontSize: 11.5, fontWeight: '600', flex: 1, marginRight: 8 }}>
+                    Suggested adjustment available
+                  </Text>
+                  <Btn
+                    variant="primary"
+                    compact
+                    icon="calendar-outline"
+                    onPress={() => openRescheduleModal(proposals[0])}
+                  >
+                    Review Changes
+                  </Btn>
+                </View>
+              ) : null}
+            </Card>
+          </Animated.View>
+        )}
+
+        {/* 5. ATTENTION / RADAR */}
         {radar.length > 0 ? (
           <>
             <SectionHeader
@@ -791,6 +1034,22 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                       </View>
                       <Bar pct={item.stats.pct} color={col} height={5} />
                     </View>
+
+                    {item.project.deadline ? (
+                      <View style={{ marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: C.border2 }}>
+                        <Text
+                          style={{
+                            color: getProjectDeadlinePressure(item.project, tasks, now, state.workDayStart, state.workDayEnd).isPressureHigh
+                              ? C.amber
+                              : C.faint,
+                            fontSize: 11.5,
+                            fontWeight: '600',
+                          }}
+                        >
+                          {getProjectDeadlinePressure(item.project, tasks, now, state.workDayStart, state.workDayEnd).statusText}
+                        </Text>
+                      </View>
+                    ) : null}
                   </Card>
                 </Animated.View>
               );

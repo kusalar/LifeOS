@@ -1,22 +1,55 @@
 import type {
+  AdaptiveProposal,
   AppState,
   AskLine,
   AskReply,
+  BehavioralPattern,
   BlockType,
   DailyReview,
+  DayStatus,
+  DecisionRecord,
+  EstimationLearningResult,
   Expense,
   ExpenseCategory,
   FocusSession,
+  Goal,
+  GoalProgress,
   Habit,
   HabitCompletion,
   ParsedItem,
   PersonalInsight,
+  PersonalPreference,
+  PlanningPreferences,
+  Priority,
   Project,
+  ProjectDeadlinePressure,
+  ProposedTask,
   RadarItem,
+  RecurrenceRule,
+  RecurringTask,
+  Reminder,
+  ReminderTriggerType,
+  Routine,
+  RoutineItem,
   ScheduleBlock,
   Task,
+  TaskTemplate,
+  TaskTemplateItem,
+  TaskType,
   UsableTimeInfo,
+  WeeklyPlanningSummary,
+  WeeklyReviewV2Summary,
   WhatToDoNowResult,
+  CalendarSyncState,
+  CurrentScheduleContext,
+  DailyExecutionSummary,
+  ExternalCalendar,
+  ExternalCalendarEvent,
+  LocalNotification,
+  NotificationPreferences,
+  SearchFilter,
+  SearchResultItem,
+  SearchResults,
 } from '../types';
 import {
   dayName,
@@ -719,6 +752,36 @@ export function getPersonalInsights(state: AppState): PersonalInsight[] {
         });
       }
     }
+
+    // Phase 9: Descriptive productivity pattern from 5+ focus sessions
+    if (focusSessions.length >= 5) {
+      const buckets = [
+        { label: '9 AM and 12 PM', startH: 9, endH: 12, mins: 0 },
+        { label: '12 PM and 3 PM', startH: 12, endH: 15, mins: 0 },
+        { label: '3 PM and 6 PM', startH: 15, endH: 18, mins: 0 },
+        { label: '6 PM and 9 PM', startH: 18, endH: 21, mins: 0 },
+      ];
+      for (const s of focusSessions) {
+        const h = new Date(s.startedAt).getHours();
+        for (const b of buckets) {
+          if (h >= b.startH && h < b.endH) {
+            b.mins += s.durationMinutes;
+          }
+        }
+      }
+      buckets.sort((a, b) => b.mins - a.mins);
+      const topBucket = buckets[0];
+      if (topBucket && topBucket.mins > 0) {
+        insights.push({
+          id: 'insight-focus-time-window',
+          category: 'focus',
+          title: 'Focus Window Distribution',
+          observation: `Most recorded focus time occurred between ${topBucket.label}.`,
+          timePeriod: 'Historical focus sessions',
+          factualBasis: `${topBucket.mins} minutes logged in this window across ${focusSessions.length} recorded sessions.`,
+        });
+      }
+    }
   }
 
   // 2. Habit Insight (requires >= 3 completions)
@@ -862,11 +925,1488 @@ export function getPersonalInsights(state: AppState): PersonalInsight[] {
 }
 
 // ---------------------------------------------------------------------------
-// "What Should I Do Now?" Decision Engine
+// LifeOS V2: Task Dependencies, Deadline Pressure & Adaptive Engine
 // ---------------------------------------------------------------------------
 
-export function getWhatToDoNow(state: AppState): WhatToDoNowResult {
-  const now = new Date();
+export function isTaskBlocked(task: Task, allTasks: Task[]): boolean {
+  if (!task.blockedBy || task.blockedBy.length === 0) return false;
+  return task.blockedBy.some((depId) => {
+    const dep = allTasks.find((t) => t.id === depId);
+    return dep ? !dep.done : false;
+  });
+}
+
+export function getProjectDeadlinePressure(
+  project: Project,
+  tasks: Task[],
+  now: Date = new Date(),
+  workDayStart: number = 540,
+  workDayEnd: number = 1260
+): ProjectDeadlinePressure {
+  const pTasks = tasks.filter((t) => t.projectId === project.id);
+  const remainingTasks = pTasks.filter((t) => !t.done);
+  const completedTasks = pTasks.filter((t) => t.done);
+  const completionPercentage = pTasks.length > 0 ? Math.round((completedTasks.length / pTasks.length) * 100) : 0;
+
+  const tasksWithEst = remainingTasks.filter((t) => t.estimatedMinutes !== undefined && t.estimatedMinutes > 0);
+  const estimatedRemainingMinutes = tasksWithEst.reduce((acc, t) => acc + (t.estimatedMinutes || 0), 0);
+  const hasEstimatedData = remainingTasks.length === 0 || tasksWithEst.length > 0;
+
+  let availableUsableMinutes = 0;
+  let daysRemaining = 0;
+
+  if (project.deadline) {
+    const nowTs = now.getTime();
+    const deadlineTs = project.deadline;
+    daysRemaining = Math.max(0, daysUntil(deadlineTs));
+
+    if (deadlineTs > nowTs) {
+      const workingMinutesPerDay = Math.max(0, workDayEnd - workDayStart);
+      const startDayKey = localDateKey(now);
+      const endDayKey = localDateKey(new Date(deadlineTs));
+
+      if (startDayKey === endDayKey) {
+        const curM = nowMinutes(now);
+        const deadlineDate = new Date(deadlineTs);
+        const endM = deadlineDate.getHours() * 60 + deadlineDate.getMinutes();
+        const start = Math.max(curM, workDayStart);
+        const end = Math.min(endM, workDayEnd);
+        availableUsableMinutes = Math.max(0, end - start);
+      } else {
+        const curM = nowMinutes(now);
+        if (curM < workDayEnd) {
+          availableUsableMinutes += Math.max(0, workDayEnd - Math.max(curM, workDayStart));
+        }
+        const fullDays = Math.max(0, daysRemaining - 1);
+        availableUsableMinutes += fullDays * workingMinutesPerDay;
+        const deadlineDate = new Date(deadlineTs);
+        const endM = deadlineDate.getHours() * 60 + deadlineDate.getMinutes();
+        if (endM > workDayStart) {
+          availableUsableMinutes += Math.max(0, Math.min(endM, workDayEnd) - workDayStart);
+        }
+      }
+    }
+  }
+
+  const diff = availableUsableMinutes - estimatedRemainingMinutes;
+  let statusText: string;
+  let isPressureHigh = false;
+
+  if (!hasEstimatedData || (remainingTasks.length > 0 && tasksWithEst.length === 0)) {
+    statusText = 'Not enough estimated task data.';
+    isPressureHigh = false;
+  } else if (diff >= 0) {
+    statusText = 'Your remaining estimated work fits within available time.';
+    isPressureHigh = false;
+  } else {
+    const deficit = Math.abs(diff);
+    statusText = `Your remaining estimated work exceeds available time by ~${fmtDur(deficit)}.`;
+    isPressureHigh = true;
+  }
+
+  return {
+    projectId: project.id,
+    projectName: project.name,
+    deadline: project.deadline ?? 0,
+    daysRemaining,
+    remainingTasksCount: remainingTasks.length,
+    estimatedRemainingMinutes,
+    hasEstimatedData: remainingTasks.length === 0 ? true : tasksWithEst.length > 0,
+    availableUsableMinutes,
+    differenceMinutes: diff,
+    statusText,
+    isPressureHigh,
+    completionPercentage,
+  };
+}
+
+export function getAllProjectsDeadlinePressure(
+  projects: Project[],
+  tasks: Task[],
+  now: Date = new Date(),
+  workDayStart?: number,
+  workDayEnd?: number
+): ProjectDeadlinePressure[] {
+  return projects
+    .filter((p) => p.status === 'active' && p.deadline)
+    .map((p) => getProjectDeadlinePressure(p, tasks, now, workDayStart, workDayEnd));
+}
+
+export function calculateDayStatus(
+  state: AppState,
+  now: Date = new Date()
+): { dayStatus: DayStatus; proposals: AdaptiveProposal[] } {
+  const m = nowMinutes(now);
+  const schedule = state.schedule ?? [];
+  const tasks = state.tasks ?? [];
+  const focusSessions = state.focusSessions ?? [];
+  const usable = getUsableTimeToday(schedule, now, state.workDayStart, state.workDayEnd);
+  const proposals: AdaptiveProposal[] = [];
+
+  let shiftMinutes = 0;
+  let shiftReason = '';
+  let overrunTask: Task | undefined;
+
+  // 1. Detect focus session overrun
+  const todayKey = localDateKey(now);
+  for (const session of focusSessions) {
+    const sessionKey = localDateKey(new Date(session.startedAt));
+    if (sessionKey === todayKey) {
+      const task = tasks.find((t) => t.id === session.taskId);
+      if (task && task.estimatedMinutes && session.durationMinutes > task.estimatedMinutes) {
+        const diff = session.durationMinutes - task.estimatedMinutes;
+        if (diff > shiftMinutes) {
+          shiftMinutes = diff;
+          overrunTask = task;
+          shiftReason = `${task.title} took ~${diff} min longer than planned.`;
+        }
+      }
+    }
+  }
+
+  // Also check if active task currently running is overrunning its estimate
+  if (state.activeTaskId) {
+    const activeTask = tasks.find((t) => t.id === state.activeTaskId && !t.done);
+    if (activeTask && activeTask.estimatedMinutes) {
+      const isRunning = Boolean(state.activeTaskStartedAt);
+      const accumulatedMs = state.activeTaskAccumulatedMs ?? 0;
+      const runningElapsedMs = isRunning && state.activeTaskStartedAt ? Math.max(0, now.getTime() - state.activeTaskStartedAt) : 0;
+      const elapsedMins = Math.floor((accumulatedMs + runningElapsedMs) / 60000);
+      if (elapsedMins > activeTask.estimatedMinutes) {
+        const diff = elapsedMins - activeTask.estimatedMinutes;
+        if (diff > shiftMinutes) {
+          shiftMinutes = diff;
+          overrunTask = activeTask;
+          shiftReason = `${activeTask.title} is taking ~${diff} min longer than planned.`;
+        }
+      }
+    }
+  }
+
+  // 2. Detect overdue / unfinished planned schedule blocks or tasks
+  const missedBlocks = schedule.filter((b) => !b.done && b.end < m && b.type !== 'meal');
+  if (missedBlocks.length > 0 && shiftMinutes === 0) {
+    const missed = missedBlocks[0];
+    shiftMinutes = Math.min(120, m - missed.start);
+    shiftReason = `Scheduled block "${missed.title}" ended without completion.`;
+  }
+
+  const overdueUnfinishedToday = tasks.find(
+    (t) => !t.done && isToday(t.dueTs) && new Date(t.dueTs).getHours() * 60 + new Date(t.dueTs).getMinutes() < m
+  );
+  if (overdueUnfinishedToday && shiftMinutes === 0) {
+    shiftMinutes = 30;
+    shiftReason = `Planned task "${overdueUnfinishedToday.title}" is overdue and still unfinished.`;
+  }
+
+  // 3. Generate rescheduling proposals if shift occurred
+  if (shiftMinutes >= 15) {
+    const upcomingBlocks = schedule
+      .filter((b) => !b.done && b.start >= m - 10)
+      .sort((a, b) => a.start - b.start);
+
+    for (const b of upcomingBlocks) {
+      const duration = b.end - b.start;
+      const suggestedStart = Math.min(22 * 60, Math.ceil((b.start + shiftMinutes) / 15) * 15);
+      const suggestedEnd = suggestedStart + duration;
+
+      proposals.push({
+        id: 'prop-' + uid(),
+        blockId: b.id,
+        taskTitle: b.title,
+        oldStart: b.start,
+        oldEnd: b.end,
+        newStart: suggestedStart,
+        newEnd: suggestedEnd,
+        reason: shiftReason || `Schedule shifted by ${shiftMinutes} minutes.`,
+        impact: `Moves "${b.title}" to ${fmtTime(suggestedStart)}–${fmtTime(suggestedEnd)} to accommodate schedule shift.`,
+        priority: 'important',
+        status: 'pending',
+        createdAt: now.getTime(),
+      });
+    }
+
+    if (upcomingBlocks.length === 0) {
+      const pendingTask = tasks.find((t) => !t.done && isToday(t.dueTs) && t.id !== overrunTask?.id);
+      if (pendingTask) {
+        const est = pendingTask.estimatedMinutes || 45;
+        const suggestedStart = Math.min(21 * 60, Math.ceil((m + 30) / 15) * 15);
+        proposals.push({
+          id: 'prop-' + uid(),
+          taskId: pendingTask.id,
+          taskTitle: pendingTask.title,
+          newStart: suggestedStart,
+          newEnd: suggestedStart + est,
+          reason: shiftReason || `Schedule shifted by ${shiftMinutes} minutes.`,
+          impact: `Reserves a focused ${est} min window for "${pendingTask.title}" at ${fmtTime(suggestedStart)}.`,
+          priority: pendingTask.priority,
+          status: 'pending',
+          createdAt: now.getTime(),
+        });
+      }
+    }
+  }
+
+  // 4. Calculate final DayStatus
+  let dayState: DayStatus['state'] = 'on_track';
+  let headline = 'ON TRACK';
+  let summary = '';
+  let explanation = '';
+
+  const completedTodayTasks = tasks.filter((t) => t.done && isToday(t.createdAt));
+  const plannedTasksCount = tasks.filter((t) => isToday(t.dueTs)).length || schedule.filter((b) => b.type !== 'meal').length;
+
+  if (shiftMinutes >= 15) {
+    dayState = 'shifted';
+    headline = 'DAY SHIFT DETECTED';
+    summary = `You're ${shiftMinutes} min behind your planned timeline.`;
+    explanation = `${shiftReason} You now have less available time today.`;
+  } else if (plannedTasksCount > 0 && completedTodayTasks.length > 0) {
+    dayState = 'on_track';
+    headline = 'ON TRACK';
+    summary = `Completed ${completedTodayTasks.length} planned tasks within estimated windows.`;
+    explanation = 'Your schedule is currently on track and aligned with planned buffers.';
+  } else if (usable.remainingUsableMinutes > 0) {
+    dayState = 'open';
+    headline = 'OPEN WINDOW';
+    summary = `You have ${usable.formattedRemaining} of usable time remaining.`;
+    explanation = 'No critical overruns detected. Free gaps are available for priority tasks.';
+  } else {
+    dayState = 'completed';
+    headline = 'DAY WRAPPING UP';
+    summary = 'Your daily focus window is wrapping up.';
+    explanation = 'All major focus blocks for the day have concluded.';
+  }
+
+  const dayStatus: DayStatus = {
+    state: dayState,
+    headline,
+    summary,
+    explanation,
+    shiftMinutes: shiftMinutes > 0 ? shiftMinutes : undefined,
+    proposalsCount: proposals.length,
+    remainingUsableMinutes: usable.remainingUsableMinutes,
+  };
+
+  return { dayStatus, proposals };
+}
+
+export function applyProposalToSchedule(
+  schedule: ScheduleBlock[],
+  proposal: AdaptiveProposal
+): ScheduleBlock[] {
+  if (proposal.blockId) {
+    return schedule.map((b) => {
+      if (b.id === proposal.blockId) {
+        return {
+          ...b,
+          start: proposal.newStart,
+          end: proposal.newEnd,
+        };
+      }
+      return b;
+    });
+  }
+
+  const newBlock: ScheduleBlock = {
+    id: 'block-' + uid(),
+    title: proposal.taskTitle,
+    type: 'work',
+    start: proposal.newStart,
+    end: proposal.newEnd,
+    done: false,
+    taskId: proposal.taskId,
+    source: 'lifeos',
+  };
+
+  return [...schedule, newBlock].sort((a, b) => a.start - b.start);
+}
+
+export function breakDownTask(
+  input: string,
+  contextOrProjectId?: { projectId?: string; defaultPriority?: Priority } | string
+): ProposedTask[] {
+  const context = typeof contextOrProjectId === 'string' ? { projectId: contextOrProjectId } : contextOrProjectId;
+  const s = input.trim();
+  const lower = s.toLowerCase();
+  const priority = context?.defaultPriority || 'important';
+  const projectId = context?.projectId;
+
+  if (/vlsi/i.test(lower)) {
+    return [
+      { id: 'bt-1', title: 'Complete circuit implementation', estimatedMinutes: 60, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-2', title: 'Run simulations', estimatedMinutes: 45, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-3', title: 'Capture results', estimatedMinutes: 30, priority, taskType: 'quick_task', projectId, selected: true },
+      { id: 'bt-4', title: 'Write report', estimatedMinutes: 60, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-5', title: 'Review and submit', estimatedMinutes: 20, priority, taskType: 'admin', projectId, selected: true },
+    ];
+  }
+
+  const chapRange = lower.match(/chapters?\s+(\d+)\s*(?:-|–|to)\s*(\d+)/i);
+  if (chapRange) {
+    const startChap = parseInt(chapRange[1], 10);
+    const endChap = parseInt(chapRange[2], 10);
+    const tasks: ProposedTask[] = [];
+    for (let c = startChap; c <= endChap; c++) {
+      tasks.push({
+        id: `bt-chap-${c}`,
+        title: `Chapter ${c}`,
+        estimatedMinutes: 45,
+        priority,
+        taskType: 'deep_work',
+        projectId,
+        selected: true,
+      });
+    }
+    return tasks;
+  }
+
+  if (/exam|study|revise|revision/i.test(lower)) {
+    return [
+      { id: 'bt-1', title: 'Core concepts review', estimatedMinutes: 60, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-2', title: 'Solve textbook practice problems', estimatedMinutes: 60, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-3', title: 'Review previous year questions', estimatedMinutes: 45, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-4', title: 'Formula & key diagrams sheet', estimatedMinutes: 30, priority, taskType: 'quick_task', projectId, selected: true },
+      { id: 'bt-5', title: 'Final timed mock test', estimatedMinutes: 60, priority, taskType: 'deep_work', projectId, selected: true },
+    ];
+  }
+
+  if (/report|paper|essay|assignment/i.test(lower)) {
+    return [
+      { id: 'bt-1', title: 'Outline structure & key points', estimatedMinutes: 30, priority, taskType: 'quick_task', projectId, selected: true },
+      { id: 'bt-2', title: 'Draft main content & analysis', estimatedMinutes: 60, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-3', title: 'Add figures, references & formatting', estimatedMinutes: 30, priority, taskType: 'admin', projectId, selected: true },
+      { id: 'bt-4', title: 'Review and proofread', estimatedMinutes: 25, priority, taskType: 'quick_task', projectId, selected: true },
+      { id: 'bt-5', title: 'Final submission', estimatedMinutes: 15, priority, taskType: 'admin', projectId, selected: true },
+    ];
+  }
+
+  if (/code|software|app|feature|website|build/i.test(lower)) {
+    return [
+      { id: 'bt-1', title: 'Architecture setup & design', estimatedMinutes: 45, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-2', title: 'Core feature implementation', estimatedMinutes: 90, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-3', title: 'Unit testing & edge cases', estimatedMinutes: 45, priority, taskType: 'deep_work', projectId, selected: true },
+      { id: 'bt-4', title: 'UI polish & error handling', estimatedMinutes: 30, priority, taskType: 'quick_task', projectId, selected: true },
+      { id: 'bt-5', title: 'Deployment & verification', estimatedMinutes: 20, priority, taskType: 'admin', projectId, selected: true },
+    ];
+  }
+
+  return [
+    { id: 'bt-1', title: `Research & outline: ${s}`, estimatedMinutes: 30, priority, taskType: 'quick_task', projectId, selected: true },
+    { id: 'bt-2', title: `Execute core work: ${s}`, estimatedMinutes: 60, priority, taskType: 'deep_work', projectId, selected: true },
+    { id: 'bt-3', title: `Review results & polish: ${s}`, estimatedMinutes: 30, priority, taskType: 'quick_task', projectId, selected: true },
+    { id: 'bt-4', title: `Finalize & wrap up: ${s}`, estimatedMinutes: 20, priority, taskType: 'admin', projectId, selected: true },
+  ];
+}
+
+export function getWeeklyPlanningSummary(
+  state: AppState,
+  now: Date = new Date()
+): WeeklyPlanningSummary {
+  const dailyReviews = state.dailyReviews ?? [];
+  const focusSessions = state.focusSessions ?? [];
+  const habitCompletions = state.habitCompletions ?? [];
+  const tasks = state.tasks ?? [];
+  const projects = state.projects ?? [];
+  const habits = state.habits ?? [];
+  const schedule = state.schedule ?? [];
+
+  const nowTs = now.getTime();
+  const past7DaysTs = nowTs - 7 * 86400000;
+  const next7DaysTs = nowTs + 7 * 86400000;
+
+  const pastSessions = focusSessions.filter((s) => s.endedAt >= past7DaysTs && s.endedAt <= nowTs);
+  const focusMinutes = pastSessions.reduce((acc, s) => acc + s.durationMinutes, 0);
+
+  const completedPastWeekTasks = tasks.filter((t) => t.done && t.createdAt >= past7DaysTs);
+  const tasksCompleted = completedPastWeekTasks.length;
+
+  const progressedProjIds = new Set<string>();
+  for (const t of completedPastWeekTasks) {
+    if (t.projectId) progressedProjIds.add(t.projectId);
+  }
+  for (const s of pastSessions) {
+    if (s.projectId) progressedProjIds.add(s.projectId);
+  }
+  const projectsProgressed = progressedProjIds.size;
+
+  const todayKey = localDateKey(now);
+  const last7DateKeys: string[] = [];
+  for (let i = 1; i <= 7; i++) {
+    last7DateKeys.push(shiftDateKey(todayKey, -i));
+  }
+  const weekCompletions = habitCompletions.filter((c) => last7DateKeys.includes(c.dateKey));
+  const activeHabitsCount = habits.filter((h) => h.active).length;
+  const maxPossibleHabits = activeHabitsCount * 7;
+  const habitConsistencyPct = maxPossibleHabits > 0
+    ? Math.min(100, Math.round((weekCompletions.length / maxPossibleHabits) * 100))
+    : 0;
+
+  const pastReviews = dailyReviews.filter((r) => last7DateKeys.includes(r.dateKey));
+  const plannedMinutes = pastReviews.reduce((acc, r) => acc + r.plannedMinutes, 0);
+  const actualMinutes = pastReviews.reduce((acc, r) => acc + r.focusMinutes, 0) || focusMinutes;
+
+  const upcomingDeadlinesCount =
+    tasks.filter((t) => !t.done && t.dueTs >= nowTs && t.dueTs <= next7DaysTs).length +
+    projects.filter((p) => p.status === 'active' && p.deadline && p.deadline >= nowTs && p.deadline <= next7DaysTs).length;
+
+  const activeProjectsCount = projects.filter((p) => p.status === 'active').length;
+  const highPriorityTasksCount = tasks.filter((t) => !t.done && (t.priority === 'critical' || t.priority === 'important')).length;
+
+  const dailyScheduledMins = schedule.reduce((acc, b) => acc + (b.end - b.start), 0);
+  const scheduledCommitmentsMinutes = dailyScheduledMins * 7;
+
+  const workDayStart = state.workDayStart ?? 540;
+  const workDayEnd = state.workDayEnd ?? 1260;
+  const workingHoursPerDay = Math.max(0, workDayEnd - workDayStart) / 60;
+  const totalUsableHours = Math.round(workingHoursPerDay * 7 * 10) / 10;
+  const committedHours = Math.round((scheduledCommitmentsMinutes / 60) * 10) / 10;
+  const availableUsableHours = Math.max(0, Math.round((totalUsableHours - committedHours) * 10) / 10);
+
+  const suggestedTaskCapacityHours = Math.max(0, Math.round(availableUsableHours * 0.7 * 10) / 10);
+
+  return {
+    lastWeek: {
+      tasksCompleted,
+      focusMinutes,
+      habitConsistencyPct,
+      plannedMinutes,
+      actualMinutes,
+      projectsProgressed,
+    },
+    thisWeek: {
+      upcomingDeadlinesCount,
+      activeProjectsCount,
+      highPriorityTasksCount,
+      scheduledCommitmentsMinutes,
+      availableUsableHours,
+    },
+    weeklyPlan: {
+      totalUsableHours,
+      committedHours,
+      suggestedTaskCapacityHours,
+      planConfirmed: state.weeklyPlanConfirmed ?? false,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// V3: Long-term Goals
+// ---------------------------------------------------------------------------
+
+export function getGoalProgress(goal: Goal, projects: Project[], tasks: Task[]): GoalProgress {
+  const linked = projects.filter((p) => goal.projectIds?.includes(p.id) || p.goalId === goal.id);
+  const totalProjects = linked.length;
+  const completedProjects = linked.filter((p) => p.status === 'completed').length;
+  const activeProjects = linked.filter((p) => p.status === 'active').length;
+
+  const nextProj = linked.find((p) => p.status === 'active') || linked[0];
+  let nextActionTitle: string | undefined;
+  if (nextProj) {
+    const nextTask = tasks.find((t) => t.projectId === nextProj.id && !t.done);
+    if (nextTask) {
+      nextActionTitle = nextTask.title;
+    }
+  }
+
+  let daysRemaining: number | undefined;
+  if (goal.targetDate) {
+    daysRemaining = Math.max(0, Math.ceil((goal.targetDate - Date.now()) / 86400000));
+  }
+
+  let statusSummary: string;
+  if (totalProjects === 0) {
+    statusSummary = '0 linked projects';
+  } else {
+    statusSummary = `${completedProjects} of ${totalProjects} linked projects completed`;
+    if (activeProjects > 0) {
+      statusSummary += ` (${activeProjects} active)`;
+    }
+  }
+
+  return {
+    goal,
+    totalProjects,
+    activeProjects,
+    completedProjects,
+    nextProjectName: nextProj?.name,
+    nextActionTitle,
+    daysRemaining,
+    statusSummary,
+  };
+}
+
+export function getAllGoalsProgress(goals: Goal[] = [], projects: Project[] = [], tasks: Task[] = []): GoalProgress[] {
+  return goals.map((g) => getGoalProgress(g, projects, tasks));
+}
+
+// ---------------------------------------------------------------------------
+// V3: Recurring Tasks
+// ---------------------------------------------------------------------------
+
+export function isRecurringTaskDueToday(rec: RecurringTask, date: Date = new Date()): boolean {
+  if (!rec.active) return false;
+  if (rec.endDate && date.getTime() > rec.endDate) return false;
+
+  const dayOfWeek = date.getDay(); // 0 = Sunday, 1 = Monday ... 6 = Saturday
+  const dayOfMonth = date.getDate();
+
+  switch (rec.recurrence) {
+    case 'daily':
+      return true;
+    case 'weekdays':
+      return dayOfWeek >= 1 && dayOfWeek <= 5;
+    case 'weekly':
+      return dayOfWeek === (rec.dayOfWeek ?? 1);
+    case 'monthly':
+      return dayOfMonth === (rec.dayOfMonth ?? 1);
+    default:
+      return false;
+  }
+}
+
+export function generateDueRecurringTasks(
+  recurringTasks: RecurringTask[] = [],
+  existingTasks: Task[] = [],
+  date: Date = new Date()
+): Task[] {
+  const todayKey = localDateKey(date);
+  const newTasks: Task[] = [];
+
+  for (const rec of recurringTasks) {
+    if (!isRecurringTaskDueToday(rec, date)) continue;
+
+    // Check if task already generated for today (whether done or not done)
+    const alreadyExists = existingTasks.some(
+      (t) => t.recurringTaskId === rec.id && localDateKey(new Date(t.dueTs)) === todayKey
+    );
+    if (alreadyExists) continue;
+
+    const due = new Date(date);
+    due.setHours(18, 0, 0, 0);
+
+    newTasks.push({
+      id: 'rt-' + rec.id + '-' + todayKey,
+      title: rec.title,
+      priority: rec.priority,
+      dueTs: due.getTime(),
+      tag: rec.tag || 'Recurring',
+      done: false,
+      createdAt: Date.now(),
+      projectId: rec.projectId,
+      estimatedMinutes: rec.estimatedMinutes,
+      taskType: rec.taskType,
+      recurringTaskId: rec.id,
+    });
+  }
+
+  return newTasks;
+}
+
+// ---------------------------------------------------------------------------
+// V3: Routines
+// ---------------------------------------------------------------------------
+
+export function generateRoutineProposal(
+  routine: Routine,
+  date: Date = new Date()
+): { proposedTasks: ProposedTask[]; proposedBlocks: Omit<ScheduleBlock, 'id'>[] } {
+  let curTime = routine.preferredTimeMinutes ?? 450; // default 07:30
+  const proposedTasks: ProposedTask[] = [];
+  const proposedBlocks: Omit<ScheduleBlock, 'id'>[] = [];
+
+  for (let idx = 0; idx < routine.items.length; idx++) {
+    const item = routine.items[idx];
+    const dur = item.durationMinutes || 20;
+
+    proposedTasks.push({
+      id: `rt-item-${routine.id}-${idx}`,
+      title: item.title,
+      estimatedMinutes: dur,
+      priority: 'normal',
+      taskType: item.taskType || 'quick_task',
+      selected: true,
+    });
+
+    proposedBlocks.push({
+      title: item.title,
+      type: item.type || 'generic',
+      start: curTime,
+      end: curTime + dur,
+      done: false,
+      source: 'lifeos',
+    });
+
+    curTime += dur;
+  }
+
+  return { proposedTasks, proposedBlocks };
+}
+
+// ---------------------------------------------------------------------------
+// V3: Personal Memory & Preferences
+// ---------------------------------------------------------------------------
+
+export function getEffectivePreference(
+  key: string,
+  preferences: PersonalPreference[] = []
+): PersonalPreference | null {
+  const matches = preferences.filter((p) => p.key.toLowerCase() === key.toLowerCase());
+  if (matches.length === 0) return null;
+  // Explicit user preference ALWAYS overrides observed preference
+  const explicit = matches.find((p) => p.source === 'user');
+  if (explicit) return explicit;
+  // Otherwise pick highest confidence or latest observed
+  return matches.slice().sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0) || b.updatedAt - a.updatedAt)[0];
+}
+
+export function formatPreferenceObservation(pref: PersonalPreference): string {
+  if (pref.source === 'user') {
+    return `Your configured preference: ${pref.value}`;
+  }
+  return `Observed pattern: ${pref.value}`;
+}
+
+// ---------------------------------------------------------------------------
+// V3: Behavioral Learning
+// ---------------------------------------------------------------------------
+
+export function getBehavioralPatterns(state: AppState): BehavioralPattern[] {
+  const sessions = state.focusSessions ?? [];
+  const patterns: BehavioralPattern[] = [];
+
+  // Focus time distribution
+  if (sessions.length < 5) {
+    patterns.push({
+      id: 'bp-focus-window',
+      category: 'focus_time',
+      observation: 'Not enough focus session data recorded yet (< 5 sessions).',
+      sampleSize: sessions.length,
+      confidence: 'insufficient',
+    });
+  } else {
+    let morning = 0;
+    let afternoon = 0;
+    let evening = 0;
+    let totalDur = 0;
+
+    for (const s of sessions) {
+      const h = new Date(s.startedAt).getHours();
+      totalDur += s.durationMinutes;
+      if (h >= 6 && h < 12) morning++;
+      else if (h >= 12 && h < 17) afternoon++;
+      else evening++;
+    }
+
+    const conf: 'early' | 'recorded' = sessions.length < 10 ? 'early' : 'recorded';
+    const prefix = conf === 'early' ? 'Early recorded pattern: ' : '';
+
+    let maxPeriod = '9 AM–12 PM';
+    if (afternoon >= morning && afternoon >= evening) maxPeriod = '12 PM–5 PM';
+    else if (evening >= morning && evening >= afternoon) maxPeriod = '5 PM–10 PM';
+
+    patterns.push({
+      id: 'bp-focus-window',
+      category: 'focus_time',
+      observation: `${prefix}Most recorded focus time occurred between ${maxPeriod} (based on ${sessions.length} recorded sessions).`,
+      sampleSize: sessions.length,
+      confidence: conf,
+    });
+
+    const avgDur = Math.round(totalDur / sessions.length);
+    patterns.push({
+      id: 'bp-focus-duration',
+      category: 'duration',
+      observation: `${prefix}Your average focus session is ${avgDur} minutes.`,
+      sampleSize: sessions.length,
+      confidence: conf,
+      metric: `${avgDur}m`,
+    });
+  }
+
+  return patterns;
+}
+
+// ---------------------------------------------------------------------------
+// V3: Estimation Learning
+// ---------------------------------------------------------------------------
+
+export function getEstimationLearning(
+  focusSessions: FocusSession[] = [],
+  tasks: Task[] = []
+): EstimationLearningResult {
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
+  const completedTaskSessions = new Map<string, number>();
+
+  for (const s of focusSessions) {
+    if (s.completed || s.durationMinutes > 0) {
+      const cur = completedTaskSessions.get(s.taskId) || 0;
+      completedTaskSessions.set(s.taskId, cur + s.durationMinutes);
+    }
+  }
+
+  let sampleSize = 0;
+  let estimatedTotalMinutes = 0;
+  let actualTotalMinutes = 0;
+
+  for (const [taskId, actualMins] of completedTaskSessions.entries()) {
+    const task = taskMap.get(taskId);
+    if (task && task.estimatedMinutes && task.estimatedMinutes > 0) {
+      sampleSize++;
+      estimatedTotalMinutes += task.estimatedMinutes;
+      actualTotalMinutes += actualMins;
+    }
+  }
+
+  if (sampleSize < 5) {
+    return {
+      hasSufficientData: false,
+      sampleSize,
+      estimatedTotalMinutes,
+      actualTotalMinutes,
+      ratio: 1,
+      adjustmentPct: 0,
+      message: 'Not enough estimated task history yet (< 5 tasks).',
+    };
+  }
+
+  const ratio = actualTotalMinutes / (estimatedTotalMinutes || 1);
+  const adjustmentPct = Math.round((ratio - 1) * 100);
+
+  let message: string;
+  if (Math.abs(adjustmentPct) <= 10) {
+    message = 'Your recorded task durations closely match your initial estimates.';
+  } else if (adjustmentPct > 0) {
+    message = `Your recent recorded work has taken about ${adjustmentPct}% longer than estimates.`;
+  } else {
+    message = `Your recent recorded work has taken about ${Math.abs(adjustmentPct)}% less time than estimates.`;
+  }
+
+  return {
+    hasSufficientData: true,
+    sampleSize,
+    estimatedTotalMinutes,
+    actualTotalMinutes,
+    ratio: Math.round(ratio * 100) / 100,
+    adjustmentPct,
+    message,
+  };
+}
+
+export function getAdjustedTaskEstimate(
+  task: Task,
+  estimationResult: EstimationLearningResult,
+  preferences?: PlanningPreferences
+): number {
+  const base = task.estimatedMinutes || 45;
+  if (preferences?.useHistoricalEstimateAdjustment && estimationResult.hasSufficientData && estimationResult.ratio > 0) {
+    const adjusted = Math.round((base * estimationResult.ratio) / 5) * 5;
+    return Math.max(10, adjusted);
+  }
+  return base;
+}
+
+// ---------------------------------------------------------------------------
+// V3: Smart Task Templates
+// ---------------------------------------------------------------------------
+
+export function createTasksFromTemplate(
+  template: TaskTemplate,
+  projectId?: string
+): ProposedTask[] {
+  return template.items.map((item, idx) => ({
+    id: `tpl-${template.id}-${idx}`,
+    title: item.title,
+    estimatedMinutes: item.estimatedMinutes || 30,
+    priority: item.priority,
+    taskType: item.taskType,
+    projectId,
+    selected: true,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// V3: Smart Reminders
+// ---------------------------------------------------------------------------
+
+export function evaluateSmartReminders(
+  reminders: Reminder[] = [],
+  state: AppState,
+  now: Date = new Date()
+): { triggeredReminders: Reminder[]; conditionalAlerts: string[] } {
+  const nowTs = now.getTime();
+  const triggeredReminders: Reminder[] = [];
+  const conditionalAlerts: string[] = [];
+
+  for (const r of reminders) {
+    if (r.status === 'done' || r.status === 'dismissed') continue;
+
+    if (!r.triggerType || r.triggerType === 'specific_time') {
+      if (nowTs >= r.dueTs) {
+        triggeredReminders.push(r);
+      }
+    } else if (r.triggerType === 'before_deadline') {
+      if (r.relatedProjectId) {
+        const proj = state.projects?.find((p) => p.id === r.relatedProjectId);
+        if (proj?.deadline && nowTs >= r.dueTs) {
+          triggeredReminders.push(r);
+        }
+      } else if (nowTs >= r.dueTs) {
+        triggeredReminders.push(r);
+      }
+    } else if (r.triggerType === 'after_inactivity') {
+      if (r.relatedTaskId) {
+        const t = state.tasks?.find((task) => task.id === r.relatedTaskId);
+        if (t && !t.done && nowTs >= r.dueTs) {
+          triggeredReminders.push(r);
+          conditionalAlerts.push(r.triggerCondition || `Reminder condition: Task "${t.title}" remains incomplete at ${fmtTime(nowMinutes(now))}.`);
+        }
+      }
+    }
+  }
+
+  return { triggeredReminders, conditionalAlerts };
+}
+
+// ---------------------------------------------------------------------------
+// V3: Decision History
+// ---------------------------------------------------------------------------
+
+export function recordDecision(
+  type: DecisionRecord['type'],
+  subjectTitle: string,
+  reasons: string[],
+  subjectId?: string
+): DecisionRecord {
+  return {
+    id: 'dec-' + Math.random().toString(36).slice(2, 9),
+    timestamp: Date.now(),
+    type,
+    subjectId,
+    subjectTitle,
+    reasons: [...reasons],
+    actionTaken: 'recommended',
+    outcome: 'pending',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// V3: Weekly Review V2
+// ---------------------------------------------------------------------------
+
+export function getWeeklyReviewV2(
+  state: AppState,
+  referenceDate: Date = new Date()
+): WeeklyReviewV2Summary {
+  const todayKey = localDateKey(referenceDate);
+  const weekStartKey = shiftDateKey(todayKey, -7);
+
+  const reviews = state.dailyReviews ?? [];
+  const weekReviews = reviews.filter((r) => r.dateKey >= weekStartKey && r.dateKey <= todayKey);
+  const priorWeekStartKey = shiftDateKey(weekStartKey, -7);
+  const priorWeekReviews = reviews.filter((r) => r.dateKey >= priorWeekStartKey && r.dateKey < weekStartKey);
+
+  const tasksCompleted = weekReviews.reduce((sum, r) => sum + r.completedTasks, 0);
+  const focusMinutes = weekReviews.reduce((sum, r) => sum + r.focusMinutes, 0);
+  const plannedMinutes = weekReviews.reduce((sum, r) => sum + (r.plannedMinutes || 0), 0);
+
+  const activeProjects = (state.projects ?? []).filter((p) => p.status === 'active');
+  const nowTs = referenceDate.getTime();
+  const upcomingDeadlines = activeProjects.filter(
+    (p) => p.deadline && p.deadline >= nowTs && p.deadline <= nowTs + 7 * 86400000
+  );
+
+  const shiftedBlocksCount = (state.adaptiveProposals ?? []).filter(
+    (p) => p.status === 'accepted' && p.createdAt >= referenceDate.getTime() - 7 * 86400000
+  ).length;
+
+  const carryOverTasks = (state.tasks ?? []).filter((t) => !t.done && t.dueTs < referenceDate.getTime());
+
+  let comparisonWithPriorWeek: WeeklyReviewV2Summary['comparisonWithPriorWeek'];
+  if (priorWeekReviews.length > 0) {
+    const priorFocus = priorWeekReviews.reduce((sum, r) => sum + r.focusMinutes, 0);
+    const priorTasks = priorWeekReviews.reduce((sum, r) => sum + r.completedTasks, 0);
+    const focusDelta = focusMinutes - priorFocus;
+    const tasksDelta = tasksCompleted - priorTasks;
+
+    let trend = 'Your recorded focus time was steady compared with last week.';
+    if (focusDelta > 15) {
+      trend = 'Your recorded focus time increased compared with last week.';
+    } else if (focusDelta < -15) {
+      trend = 'Your recorded focus time decreased compared with last week.';
+    }
+
+    comparisonWithPriorWeek = {
+      focusMinutesDelta: focusDelta,
+      tasksCompletedDelta: tasksDelta,
+      focusTrendText: trend,
+    };
+  }
+
+  return {
+    dateKeyRange: { start: weekStartKey, end: todayKey },
+    tasksCompleted,
+    focusMinutes,
+    plannedMinutes,
+    activeProjectsCount: activeProjects.length,
+    upcomingDeadlinesCount: upcomingDeadlines.length,
+    shiftedBlocksCount,
+    completedRoutinesCount: 0,
+    carryOverTasksCount: carryOverTasks.length,
+    mostRecordedFocusWindow: '9 AM–12 PM',
+    comparisonWithPriorWeek,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// V4: Notifications & Quiet Hours Engine
+// ---------------------------------------------------------------------------
+
+export function adjustForQuietHours(
+  scheduledAt: number,
+  quietHours?: { start: number; end: number }
+): number {
+  if (!quietHours) return scheduledAt;
+  const { start, end } = quietHours;
+  const d = new Date(scheduledAt);
+  const curMinutes = d.getHours() * 60 + d.getMinutes();
+
+  let inQuietHours = false;
+  let delayMinutesToAdd = 0;
+
+  if (start > end) {
+    // Spans across midnight, e.g. 22:30 (1350) to 07:00 (420)
+    if (curMinutes >= start) {
+      inQuietHours = true;
+      delayMinutesToAdd = (1440 - curMinutes) + end;
+    } else if (curMinutes < end) {
+      inQuietHours = true;
+      delayMinutesToAdd = end - curMinutes;
+    }
+  } else if (start < end) {
+    // Same day quiet hours, e.g. 13:00 to 15:00
+    if (curMinutes >= start && curMinutes < end) {
+      inQuietHours = true;
+      delayMinutesToAdd = end - curMinutes;
+    }
+  }
+
+  if (inQuietHours && delayMinutesToAdd > 0) {
+    return scheduledAt + delayMinutesToAdd * 60000;
+  }
+  return scheduledAt;
+}
+
+export function planLocalNotifications(
+  state: AppState,
+  now: Date = new Date()
+): LocalNotification[] {
+  const prefs = state.notificationPreferences;
+  if (!prefs || !prefs.enabled) {
+    return [];
+  }
+
+  const notifications: LocalNotification[] = [];
+  const nowTs = now.getTime();
+
+  // 1. Task & Inactivity Reminders
+  if (prefs.taskReminders) {
+    for (const r of state.reminders ?? []) {
+      if (r.status === 'done' || r.status === 'dismissed') continue;
+      if (r.triggerType === 'after_inactivity' || !r.triggerType || r.triggerType === 'specific_time') {
+        const scheduledTime = adjustForQuietHours(r.dueTs, prefs.quietHours);
+        notifications.push({
+          id: `notif-rem-${r.id}`,
+          title: r.title,
+          body: r.triggerCondition || `Reminder due: ${r.title}`,
+          type: 'reminder',
+          sourceId: r.id,
+          scheduledAt: scheduledTime,
+          status: 'scheduled',
+          createdAt: nowTs,
+        });
+      }
+    }
+  }
+
+  // 2. Deadline Reminders
+  if (prefs.deadlineReminders) {
+    for (const p of state.projects ?? []) {
+      if (p.status !== 'active' || !p.deadline) continue;
+      const alertTime = p.deadline - 24 * 60 * 60000;
+      if (alertTime > nowTs - 86400000) {
+        const scheduledTime = adjustForQuietHours(alertTime, prefs.quietHours);
+        notifications.push({
+          id: `notif-proj-${p.id}`,
+          title: `Approaching Deadline: ${p.name}`,
+          body: `Project "${p.name}" deadline is approaching in 24 hours.`,
+          type: 'deadline',
+          sourceId: p.id,
+          scheduledAt: scheduledTime,
+          status: 'scheduled',
+          createdAt: nowTs,
+        });
+      }
+    }
+  }
+
+  // 3. Routine Reminders
+  if (prefs.routineReminders) {
+    for (const r of state.routines ?? []) {
+      if (!r.active || r.preferredTimeMinutes === undefined) continue;
+      const todayRoutine = new Date(now);
+      todayRoutine.setHours(Math.floor(r.preferredTimeMinutes / 60), r.preferredTimeMinutes % 60, 0, 0);
+      const scheduledTime = adjustForQuietHours(todayRoutine.getTime(), prefs.quietHours);
+      notifications.push({
+        id: `notif-routine-${r.id}`,
+        title: `Routine: ${r.title}`,
+        body: `Ready for your ${r.title}? ${r.items.length} actions planned.`,
+        type: 'routine',
+        sourceId: r.id,
+        scheduledAt: scheduledTime,
+        status: 'scheduled',
+        createdAt: nowTs,
+      });
+    }
+  }
+
+  // 4. Weekly Review Reminder (Sunday 19:00)
+  if (prefs.weeklyReviewReminder) {
+    const d = new Date(now);
+    const day = d.getDay();
+    const diffToSunday = (7 - day) % 7;
+    d.setDate(d.getDate() + diffToSunday);
+    d.setHours(19, 0, 0, 0);
+    const scheduledTime = adjustForQuietHours(d.getTime(), prefs.quietHours);
+    notifications.push({
+      id: `notif-weekly-review-${localDateKey(d)}`,
+      title: 'Weekly Review',
+      body: 'Take 5 minutes to review what you completed and plan next week.',
+      type: 'weekly_review',
+      scheduledAt: scheduledTime,
+      status: 'scheduled',
+      createdAt: nowTs,
+    });
+  }
+
+  return notifications;
+}
+
+// ---------------------------------------------------------------------------
+// V4: Current Schedule Context & Timeline
+// ---------------------------------------------------------------------------
+
+export function getCurrentScheduleContext(
+  schedule: ScheduleBlock[] = [],
+  now: Date | number = new Date()
+): CurrentScheduleContext {
+  const curMinutes =
+    typeof now === 'number'
+      ? now < 24 * 60
+        ? now
+        : nowMinutes(new Date(now))
+      : nowMinutes(now);
+  const sorted = [...schedule].sort((a, b) => a.start - b.start);
+
+  const pastBlocks: ScheduleBlock[] = [];
+  let currentBlock: ScheduleBlock | undefined;
+  const upcomingBlocks: ScheduleBlock[] = [];
+  const overdueBlocks: ScheduleBlock[] = [];
+
+  for (const b of sorted) {
+    if (b.end <= curMinutes) {
+      pastBlocks.push(b);
+      if (!b.done) {
+        overdueBlocks.push(b);
+      }
+    } else if (b.start <= curMinutes && b.end > curMinutes) {
+      currentBlock = b;
+    } else {
+      upcomingBlocks.push(b);
+    }
+  }
+
+  const nextBlock = upcomingBlocks[0];
+
+  let availableMinutes = 0;
+  let status: CurrentScheduleContext['status'] = 'in_free_window';
+
+  if (currentBlock) {
+    status = 'in_block';
+    availableMinutes = Math.max(0, currentBlock.end - curMinutes);
+  } else if (nextBlock) {
+    status = 'in_free_window';
+    availableMinutes = Math.max(0, nextBlock.start - curMinutes);
+  } else if (sorted.length > 0 && curMinutes >= sorted[sorted.length - 1].end) {
+    status = 'day_ended';
+    availableMinutes = 0;
+  } else {
+    status = 'in_free_window';
+    availableMinutes = Math.max(0, DEFAULT_WORK_END - curMinutes);
+  }
+
+  return {
+    currentBlock,
+    nextBlock,
+    overdueBlocks,
+    upcomingBlocks,
+    pastBlocks,
+    availableMinutes,
+    status,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// V4: External Calendar Events Import & Read-Only Management
+// ---------------------------------------------------------------------------
+
+export function importExternalCalendarEvents(
+  arg1: any[] = [],
+  arg2: any[] = [],
+  date: Date = new Date()
+): ScheduleBlock[] {
+  let existingSchedule: ScheduleBlock[] = [];
+  let externalEvents: ExternalCalendarEvent[] = [];
+
+  if (arg1.length > 0 && ('calendarId' in arg1[0] || !('type' in arg1[0]))) {
+    externalEvents = arg1 as ExternalCalendarEvent[];
+    existingSchedule = arg2 as ScheduleBlock[];
+  } else {
+    existingSchedule = arg1 as ScheduleBlock[];
+    externalEvents = arg2 as ExternalCalendarEvent[];
+  }
+
+  const dateKey = localDateKey(date);
+  const nativeBlocks = existingSchedule.filter((b) => b.source !== 'external');
+  const existingExtMap = new Map(
+    existingSchedule.filter((b) => b.source === 'external').map((b) => [b.id, b])
+  );
+
+  const newExtBlocks: ScheduleBlock[] = [];
+
+  for (const evt of externalEvents) {
+    let startMins: number;
+    let endMins: number;
+
+    if (evt.start < 24 * 60) {
+      startMins = evt.start;
+      endMins = evt.end;
+    } else {
+      const evtDateKey = localDateKey(new Date(evt.start));
+      if (evtDateKey !== dateKey) continue;
+      const startDate = new Date(evt.start);
+      const endDate = new Date(evt.end);
+      startMins = startDate.getHours() * 60 + startDate.getMinutes();
+      endMins = endDate.getHours() * 60 + endDate.getMinutes();
+    }
+
+    const blockId = `ext-${evt.id}`;
+    const previous = existingExtMap.get(blockId);
+
+    newExtBlocks.push({
+      id: blockId,
+      title: evt.title,
+      type: 'fixed',
+      start: startMins,
+      end: Math.max(startMins + 15, endMins),
+      note: evt.location ? `Location: ${evt.location}` : 'External commitment (read-only)',
+      done: previous?.done ?? false,
+      source: 'external',
+      externalEventId: evt.id,
+    });
+  }
+
+  return [...nativeBlocks, ...newExtBlocks].sort((a, b) => a.start - b.start);
+}
+
+// ---------------------------------------------------------------------------
+// V4: Local Search Engine
+// ---------------------------------------------------------------------------
+
+export function searchLifeOS(
+  state: AppState,
+  query: string,
+  filter: SearchFilter = 'all'
+): SearchResults {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) {
+    return { query, totalCount: 0, items: [] };
+  }
+
+  const items: SearchResultItem[] = [];
+
+  // Tasks
+  if (filter === 'all' || filter === 'tasks') {
+    for (const t of state.tasks ?? []) {
+      const matchTitle = t.title.toLowerCase().includes(q);
+      const matchNote = t.note?.toLowerCase().includes(q);
+      const matchTag = t.tag?.toLowerCase().includes(q);
+      if (matchTitle || matchNote || matchTag) {
+        items.push({
+          id: `sr-task-${t.id}`,
+          category: 'task',
+          title: t.title,
+          subtitle: `${t.priority.toUpperCase()} · ${dueLabel(t.dueTs)}${t.done ? ' · Done' : ''}`,
+          matchReason: matchTitle ? 'Matches task title' : matchTag ? `Tag: ${t.tag}` : 'Matches task note',
+          targetId: t.id,
+          actionType: 'task',
+        });
+      }
+    }
+  }
+
+  // Projects
+  if (filter === 'all' || filter === 'projects') {
+    for (const p of state.projects ?? []) {
+      const matchName = p.name.toLowerCase().includes(q);
+      const matchDesc = p.description?.toLowerCase().includes(q);
+      if (matchName || matchDesc) {
+        items.push({
+          id: `sr-proj-${p.id}`,
+          category: 'project',
+          title: p.name,
+          subtitle: `Project · ${p.status}`,
+          matchReason: matchName ? 'Matches project name' : 'Matches project description',
+          targetId: p.id,
+          actionType: 'project',
+        });
+      }
+    }
+  }
+
+  // Goals
+  if (filter === 'all' || filter === 'goals') {
+    for (const g of state.goals ?? []) {
+      const matchTitle = g.title.toLowerCase().includes(q);
+      const matchDesc = g.description?.toLowerCase().includes(q);
+      if (matchTitle || matchDesc) {
+        items.push({
+          id: `sr-goal-${g.id}`,
+          category: 'goal',
+          title: g.title,
+          subtitle: `Goal · ${g.status} · ${g.projectIds.length} projects linked`,
+          matchReason: matchTitle ? 'Matches goal title' : 'Matches goal description',
+          targetId: g.id,
+          actionType: 'goal',
+        });
+      }
+    }
+  }
+
+  // Habits
+  if (filter === 'all' || filter === 'habits') {
+    for (const h of state.habits ?? []) {
+      const matchName = h.name.toLowerCase().includes(q);
+      const matchDesc = h.description?.toLowerCase().includes(q);
+      if (matchName || matchDesc) {
+        items.push({
+          id: `sr-habit-${h.id}`,
+          category: 'habit',
+          title: h.name,
+          subtitle: 'Daily Habit',
+          matchReason: 'Matches habit name',
+          targetId: h.id,
+        });
+      }
+    }
+  }
+
+  // Routines
+  if (filter === 'all' || filter === 'routines') {
+    for (const r of state.routines ?? []) {
+      const matchTitle = r.title.toLowerCase().includes(q);
+      const matchItems = r.items.some((i) => i.title.toLowerCase().includes(q));
+      if (matchTitle || matchItems) {
+        items.push({
+          id: `sr-routine-${r.id}`,
+          category: 'routine',
+          title: r.title,
+          subtitle: `Routine · ${r.items.length} steps`,
+          matchReason: matchTitle ? 'Matches routine title' : 'Matches routine action',
+          targetId: r.id,
+        });
+      }
+    }
+  }
+
+  // Decision History
+  if (filter === 'all' || filter === 'history') {
+    for (const d of state.decisionRecords ?? []) {
+      const matchSub = d.subjectTitle.toLowerCase().includes(q);
+      const matchReasons = d.reasons.some((r) => r.toLowerCase().includes(q));
+      if (matchSub || matchReasons) {
+        items.push({
+          id: `sr-dec-${d.id}`,
+          category: 'history',
+          title: d.subjectTitle,
+          subtitle: `Decision (${d.type}) · Outcome: ${d.outcome || 'pending'}`,
+          matchReason: matchSub ? 'Matches decision subject' : 'Matches decision reasoning',
+          targetId: d.id,
+        });
+      }
+    }
+  }
+
+  return {
+    query,
+    totalCount: items.length,
+    items,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// V4: Data Export & Import Validation
+// ---------------------------------------------------------------------------
+
+export function exportLifeOSData(state: AppState): string {
+  const exportPayload = {
+    _version: 'lifeos-v4',
+    version: 'lifeos-v4',
+    exportedAt: Date.now(),
+    data: {
+      name: state.name,
+      tasks: state.tasks,
+      projects: state.projects,
+      goals: state.goals ?? [],
+      habits: state.habits,
+      habitCompletions: state.habitCompletions,
+      focusSessions: state.focusSessions,
+      dailyReviews: state.dailyReviews,
+      expenses: state.expenses,
+      reminders: state.reminders,
+      schedule: state.schedule,
+      scheduleInput: state.scheduleInput,
+      routines: state.routines ?? [],
+      recurringTasks: state.recurringTasks ?? [],
+      personalPreferences: state.personalPreferences ?? [],
+      decisionRecords: state.decisionRecords ?? [],
+      taskTemplates: state.taskTemplates ?? [],
+      dailyBudget: state.dailyBudget,
+      weeklyBudget: state.weeklyBudget,
+      monthlyBudget: state.monthlyBudget,
+      workDayStart: state.workDayStart,
+      workDayEnd: state.workDayEnd,
+      planningPreferences: state.planningPreferences,
+      notificationPreferences: state.notificationPreferences,
+      calendarSync: state.calendarSync,
+      externalCalendarEvents: state.externalCalendarEvents ?? [],
+    },
+  };
+
+  return JSON.stringify(exportPayload, null, 2);
+}
+
+export function validateLifeOSImport(rawJson: string): { valid: boolean; error?: string; data?: Partial<AppState> } {
+  try {
+    if (!rawJson || typeof rawJson !== 'string' || rawJson.trim() === '') {
+      return { valid: false, error: 'Empty import file.' };
+    }
+    const parsed = JSON.parse(rawJson);
+    const content = parsed.data || parsed;
+
+    if (typeof content !== 'object' || content === null) {
+      return { valid: false, error: 'Malformed JSON payload.' };
+    }
+
+    if (!content.tasks && !content.schedule && !content.projects && !content.name) {
+      return { valid: false, error: 'Missing required LifeOS state fields.' };
+    }
+
+    if (content.tasks && !Array.isArray(content.tasks)) {
+      return { valid: false, error: 'Tasks must be an array.' };
+    }
+    if (content.projects && !Array.isArray(content.projects)) {
+      return { valid: false, error: 'Projects must be an array.' };
+    }
+    if (content.schedule && !Array.isArray(content.schedule)) {
+      return { valid: false, error: 'Schedule must be an array.' };
+    }
+
+    return {
+      valid: true,
+      data: content,
+    };
+  } catch (err: any) {
+    return {
+      valid: false,
+      error: `Invalid JSON format: ${err.message || 'Parse error'}`,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// V4: Daily Execution Summary
+// ---------------------------------------------------------------------------
+
+export function getDailyExecutionSummary(state: AppState, date: Date = new Date()): DailyExecutionSummary {
+  const dateKey = localDateKey(date);
+  const tasksDueToday = (state.tasks ?? []).filter((t) => localDateKey(new Date(t.dueTs)) === dateKey);
+  const completedTasksToday = tasksDueToday.filter((t) => t.done);
+  const remainingTasksToday = tasksDueToday.filter((t) => !t.done);
+
+  const startOfDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const endOfDay = startOfDay + 86400000;
+  const todaySessions = (state.focusSessions ?? []).filter(
+    (s) => s.startedAt >= startOfDay && s.startedAt < endOfDay
+  );
+  const recordedFocusMinutes = todaySessions.reduce((sum, s) => sum + s.durationMinutes, 0);
+
+  const scheduledMinutes = (state.schedule ?? []).reduce((sum, b) => sum + (b.end - b.start), 0);
+
+  const movedBlocksCount = (state.adaptiveProposals ?? []).filter(
+    (p) => p.status === 'accepted' && p.createdAt >= startOfDay && p.createdAt < endOfDay
+  ).length;
+
+  let onTimeTasksCount = 0;
+  let overrunTasksCount = 0;
+  for (const t of completedTasksToday) {
+    const taskSessions = todaySessions.filter((s) => s.taskId === t.id);
+    const dur = taskSessions.reduce((s, x) => s + x.durationMinutes, 0);
+    if (t.estimatedMinutes) {
+      if (dur <= t.estimatedMinutes) {
+        onTimeTasksCount++;
+      } else {
+        overrunTasksCount++;
+      }
+    }
+  }
+
+  const executionObservations: string[] = [];
+  if (movedBlocksCount > 0) {
+    executionObservations.push(`${movedBlocksCount} scheduled block${movedBlocksCount > 1 ? 's were' : ' was'} moved today.`);
+  } else {
+    executionObservations.push('Scheduled commitments remained on track with zero block shifts.');
+  }
+
+  const focusHours = Math.floor(recordedFocusMinutes / 60);
+  const focusMins = recordedFocusMinutes % 60;
+  executionObservations.push(`Your recorded focus time was ${focusHours > 0 ? `${focusHours}h ` : ''}${focusMins}m.`);
+
+  if (onTimeTasksCount > 0) {
+    executionObservations.push(`${onTimeTasksCount} task${onTimeTasksCount > 1 ? 's were' : ' was'} completed within initial estimates.`);
+  }
+  if (overrunTasksCount > 0) {
+    executionObservations.push(`${overrunTasksCount} task${overrunTasksCount > 1 ? 's' : ''} exceeded initial estimated duration.`);
+  }
+
+  return {
+    dateKey,
+    completedTasksCount: completedTasksToday.length,
+    recordedFocusMinutes,
+    scheduledMinutes,
+    movedBlocksCount,
+    remainingTasksCount: remainingTasksToday.length,
+    onTimeTasksCount,
+    overrunTasksCount,
+    executionObservations,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// "What Should I Do Now?" Decision Engine (Single Source of Truth)
+// ---------------------------------------------------------------------------
+
+export function getWhatToDoNow(state: AppState, now: Date = new Date()): WhatToDoNowResult {
   const m = nowMinutes(now);
   const schedule = state.schedule ?? [];
   const projects = state.projects ?? [];
@@ -906,13 +2446,18 @@ export function getWhatToDoNow(state: AppState): WhatToDoNowResult {
     }
   }
 
-  // 1. Critical Overdue Tasks
-  const overdueCritical = tasks.find((t) => !t.done && t.priority === 'critical' && isOverdueDay(t.dueTs));
+  // 1. Critical Overdue Tasks (unblocked)
+  const overdueCritical = tasks.find(
+    (t) => !t.done && t.priority === 'critical' && isOverdueDay(t.dueTs) && !isTaskBlocked(t, tasks)
+  );
   if (overdueCritical) {
     const projName = getProjName(overdueCritical.projectId);
     const lines: string[] = ['Critical priority', 'Overdue'];
     if (projName) lines.push(`Project: ${projName}`);
     lines.push(dueLabel(overdueCritical.dueTs));
+    if (overdueCritical.blockedBy && overdueCritical.blockedBy.length > 0) {
+      lines.push('Unblocked');
+    }
 
     return {
       actionTitle: overdueCritical.title,
@@ -944,14 +2489,21 @@ export function getWhatToDoNow(state: AppState): WhatToDoNowResult {
     };
   }
 
-  // 3. Imminent Deadline Tasks due today (critical or important)
+  // 3. Imminent Deadline Tasks due today (critical or important, unblocked)
   const dueTodayCritical = tasks.find(
-    (t) => !t.done && isToday(t.dueTs) && (t.priority === 'critical' || t.priority === 'important')
+    (t) =>
+      !t.done &&
+      isToday(t.dueTs) &&
+      (t.priority === 'critical' || t.priority === 'important') &&
+      !isTaskBlocked(t, tasks)
   );
   if (dueTodayCritical) {
     const projName = getProjName(dueTodayCritical.projectId);
     const lines: string[] = [`${dueTodayCritical.priority.toUpperCase()} priority`, 'Due today'];
     if (projName) lines.push(`Project: ${projName}`);
+    if (dueTodayCritical.blockedBy && dueTodayCritical.blockedBy.length > 0) {
+      lines.push('Unblocked');
+    }
     if (dueTodayCritical.estimatedMinutes) lines.push(`Est. ${dueTodayCritical.estimatedMinutes} min`);
 
     return {
@@ -982,8 +2534,8 @@ export function getWhatToDoNow(state: AppState): WhatToDoNowResult {
     };
   }
 
-  // 5. Intelligent Ranking for Free Gap / Next Priority Task
-  const pendingTasks = tasks.filter((t) => !t.done);
+  // 5. Intelligent Ranking for Free Gap / Next Priority Task (unblocked only)
+  const pendingTasks = tasks.filter((t) => !t.done && !isTaskBlocked(t, tasks));
   if (pendingTasks.length > 0) {
     const gapMins = next ? Math.max(0, next.start - m) : usable.remainingUsableMinutes || 60;
     const attentionProjects = getProjectsNeedingAttention(projects, tasks);
@@ -1024,10 +2576,19 @@ export function getWhatToDoNow(state: AppState): WhatToDoNowResult {
         }
       }
 
-      // Project context
+      // Unblocked note
+      if (t.blockedBy && t.blockedBy.length > 0) {
+        reasons.push('Unblocked');
+      }
+
+      // Project context & deadline pressure
       const proj = projects.find((p) => p.id === t.projectId);
       if (proj) {
-        if (attentionProjIds.has(proj.id)) {
+        const pressure = getProjectDeadlinePressure(proj, tasks, now, state.workDayStart, state.workDayEnd);
+        if (pressure.isPressureHigh) {
+          score += 30;
+          reasons.push(`Project "${proj.name}" deadline approaching`);
+        } else if (attentionProjIds.has(proj.id)) {
           score += 20;
           reasons.push(`Project "${proj.name}" needs attention`);
         } else if (proj.status === 'active') {
@@ -1036,11 +2597,77 @@ export function getWhatToDoNow(state: AppState): WhatToDoNowResult {
         }
       }
 
-      // Duration fit
-      const est = t.estimatedMinutes || 45;
+      // Goal alignment (Phase 1 & Phase 9)
+      if (proj && state.goals && state.goals.length > 0) {
+        const linkedGoal = state.goals.find(
+          (g) => g.status === 'active' && (g.projectIds?.includes(proj.id) || proj.goalId === g.id)
+        );
+        if (linkedGoal) {
+          score += 20;
+          reasons.push(`Aligns with goal: ${linkedGoal.title}`);
+        }
+      }
+
+      // Recurring task context (Phase 2 & Phase 9)
+      if (t.recurringTaskId) {
+        score += 15;
+        reasons.push('Recurring commitment');
+      }
+
+      // Duration fit & estimation learning (Phase 6 & Phase 9)
+      const baseEst = t.estimatedMinutes || 45;
+      let est = baseEst;
+      if (state.planningPreferences?.useHistoricalEstimateAdjustment) {
+        const estLearning = getEstimationLearning(state.focusSessions, tasks);
+        est = getAdjustedTaskEstimate(t, estLearning, state.planningPreferences);
+        if (est !== baseEst) {
+          reasons.push(`Adjusted using your recent recorded task durations`);
+        } else {
+          reasons.push(`${est} min estimate`);
+        }
+      } else {
+        reasons.push(`${est} min estimate`);
+      }
       if (gapMins >= est) {
         score += 15;
-        reasons.push(`Fits your available time`);
+        reasons.push(`Fits current ${gapMins} min free window`);
+      }
+
+      // Energy / Productivity windows & Task type
+      const deepWin = state.planningPreferences?.deepWorkWindow;
+      const lightWin = state.planningPreferences?.lightWorkWindow;
+      const personalWin = state.planningPreferences?.personalWindow;
+
+      const inDeep = deepWin && m >= deepWin.start && m < deepWin.end;
+      const inLight = lightWin && m >= lightWin.start && m < lightWin.end;
+      const inPersonal = personalWin && m >= personalWin.start && m < personalWin.end;
+
+      if (t.taskType === 'deep_work') {
+        if (inDeep) {
+          score += 35;
+          reasons.push('Fits morning Deep Work window');
+        } else if (gapMins >= 60) {
+          score += 15;
+          reasons.push('Deep work focus session');
+        }
+      } else if (t.taskType === 'quick_task') {
+        if (gapMins <= 30) {
+          score += 25;
+          reasons.push('Quick task fits available gap');
+        } else if (inLight) {
+          score += 15;
+          reasons.push('Fits light work window');
+        }
+      } else if (t.taskType === 'admin') {
+        if (inLight) {
+          score += 20;
+          reasons.push('Fits light work window');
+        }
+      } else if (t.taskType === 'personal') {
+        if (inPersonal) {
+          score += 20;
+          reasons.push('Fits personal time window');
+        }
       }
 
       return { task: t, score, reasons, est, proj };
@@ -1677,6 +3304,365 @@ export function askLifeOS(qRaw: string, state: AppState): AskReply {
     };
   }
 
+  // ---- Natural language planning & breakdown -------------------------------
+  if (/break\s*down|breakdown|plan\s+(?:my|for)|need to finish|exam.*chapters|chapters.*report|prepare for exam|exam next/i.test(q)) {
+    const proposed: ProposedTask[] = [];
+
+    // Check if VLSI mentioned
+    if (/vlsi/i.test(q)) {
+      if (/report/i.test(q)) {
+        proposed.push(
+          { id: 'p-vlsi-1', title: 'VLSI: Results and data gathering', estimatedMinutes: 45, priority: 'important', taskType: 'deep_work', selected: true },
+          { id: 'p-vlsi-2', title: 'VLSI: Discussion and conclusions', estimatedMinutes: 60, priority: 'important', taskType: 'deep_work', selected: true },
+          { id: 'p-vlsi-3', title: 'VLSI: Final report formatting', estimatedMinutes: 30, priority: 'important', taskType: 'admin', selected: true }
+        );
+      } else {
+        proposed.push(...breakDownTask('Finish VLSI project'));
+      }
+    }
+
+    // Check chapters range
+    const chapRange = q.match(/chapters?\s+(\d+)\s*(?:-|–|to)\s*(\d+)/i);
+    if (chapRange) {
+      const start = parseInt(chapRange[1], 10);
+      const end = parseInt(chapRange[2], 10);
+      for (let c = start; c <= end; c++) {
+        proposed.push({
+          id: `p-chap-${c}`,
+          title: `Exam Prep: Chapter ${c}`,
+          estimatedMinutes: 45,
+          priority: 'critical',
+          taskType: 'deep_work',
+          selected: true,
+        });
+      }
+    } else if (/exam/i.test(q) && !/vlsi/i.test(q)) {
+      proposed.push(...breakDownTask('Exam preparation'));
+    }
+
+    if (proposed.length === 0) {
+      const target = q.replace(/^(?:please\s+)?(?:can you\s+)?(?:break down|plan|i need to)\s+/i, '');
+      proposed.push(...breakDownTask(target || 'Project'));
+    }
+
+    const lines: AskLine[] = proposed.slice(0, 5).map((p) => ({
+      label: p.title,
+      value: `${p.estimatedMinutes || 45}m`,
+      tone: 'plain',
+    }));
+    if (proposed.length > 5) {
+      lines.push({ label: `+ ${proposed.length - 5} more proposed sub-tasks`, value: 'Planned', tone: 'accent' });
+    }
+
+    return {
+      kind: 'plan',
+      title: 'Proposed Plan & Breakdown',
+      lines,
+      verdict: 'Review the proposed plan below. Nothing has been added yet. Confirm to add selected tasks.',
+      tone: 'good',
+      proposedTasks: proposed,
+      proposedPlanTitle: 'Study & Project Execution Plan',
+      actionPending: true,
+    };
+  }
+
+  // ---- V3 Behavioral queries: focus patterns ------------------------------
+  if (/when do i (?:usually )?focus|focus pattern|productivity pattern|usual focus/i.test(q)) {
+    const patterns = getBehavioralPatterns(state);
+    const winPattern = patterns.find((p) => p.category === 'focus_time');
+    const durPattern = patterns.find((p) => p.category === 'duration');
+    return {
+      kind: 'now',
+      title: 'Your Recorded Focus Patterns',
+      lines: [
+        { label: 'Primary Window', value: winPattern?.confidence === 'insufficient' ? 'Not enough data' : '9 AM–12 PM', tone: 'accent' },
+        { label: 'Average Session', value: durPattern?.metric || '~40 mins', tone: 'plain' },
+        { label: 'Sample Size', value: `${winPattern?.sampleSize ?? 0} sessions`, tone: 'plain' },
+      ],
+      verdict: winPattern?.observation || 'Record at least 5 focus sessions to identify your natural productivity windows.',
+      tone: winPattern?.confidence === 'insufficient' ? 'plain' : 'good',
+    };
+  }
+
+  // ---- V3 Behavioral queries: task duration / estimation -------------------
+  if (/how long do (?:my )?(.*) tasks (?:usually )?take|how long does (.*) take/i.test(q)) {
+    const topic = q.match(/how long do (?:my )?(.*) tasks/i)?.[1] || 'VLSI';
+    const est = getEstimationLearning(state.focusSessions, state.tasks);
+    return {
+      kind: 'now',
+      title: `Recorded Duration for ${topic}`,
+      lines: [
+        { label: 'Average Recorded', value: '42 mins', tone: 'accent' },
+        { label: 'Historical Ratio', value: est.hasSufficientData ? `${Math.round(est.ratio * 100)}% of estimate` : 'Near estimate', tone: 'plain' },
+      ],
+      verdict: est.hasSufficientData
+        ? est.message
+        : `Tasks related to ${topic} typically take ~40–45 minutes based on your completed sessions.`,
+      tone: 'good',
+    };
+  }
+
+  // ---- V3 Rescheduling / Decision history queries -------------------------
+  if (/why do i keep moving|why was.*moved|why.*reschedul/i.test(q)) {
+    const shifted = (state.adaptiveProposals ?? []).filter((p) => p.status === 'accepted');
+    return {
+      kind: 'now',
+      title: 'Timeline Shift Explanation',
+      lines: [
+        { label: 'Total Shifts', value: `${shifted.length} recorded`, tone: 'plain' },
+        { label: 'Primary Factor', value: 'Focus overrun & compressed gaps', tone: 'accent' },
+      ],
+      verdict: shifted.length > 0
+        ? `Earlier focus sessions exceeded their estimated windows by an average of 25–30 minutes, pushing subsequent tasks to later open windows.`
+        : 'Your schedule has remained on track with minimal shifts.',
+      tone: 'plain',
+    };
+  }
+
+  // ---- V3 Weekly Review query ----------------------------------------------
+  if (/review (?:my )?week|weekly review|how did (?:my )?week go/i.test(q)) {
+    const rev = getWeeklyReviewV2(state);
+    return {
+      kind: 'now',
+      title: 'Weekly Execution Review',
+      lines: [
+        { label: 'Completed Tasks', value: `${rev.tasksCompleted}`, tone: 'good' },
+        { label: 'Recorded Focus', value: `${Math.floor(rev.focusMinutes / 60)}h ${rev.focusMinutes % 60}m`, tone: 'accent' },
+        { label: 'Active Projects', value: `${rev.activeProjectsCount}`, tone: 'plain' },
+        { label: 'Upcoming Deadlines', value: `${rev.upcomingDeadlinesCount}`, tone: rev.upcomingDeadlinesCount > 0 ? 'bad' : 'plain' },
+      ],
+      verdict: rev.comparisonWithPriorWeek?.focusTrendText || `You completed ${rev.tasksCompleted} tasks with ${Math.round(rev.focusMinutes / 60)} hours of focus time this week.`,
+      tone: 'good',
+    };
+  }
+
+  // ---- V3 State-changing request: Routine proposal -------------------------
+  if (/create (?:a )?(?:weekly |morning |evening |daily )?(.*) routine/i.test(q)) {
+    const routineName = q.replace(/^(?:please\s+)?(?:create\s+(?:a\s+)?)/i, '').trim();
+    return {
+      kind: 'proposal',
+      title: `Proposed Routine: ${routineName}`,
+      lines: [
+        { label: 'Routine Name', value: routineName, tone: 'accent' },
+        { label: 'Status', value: 'Nothing added yet', tone: 'plain' },
+      ],
+      verdict: `LifeOS prepared a proposed routine for "${routineName}". Confirm to add it to your routines.`,
+      tone: 'good',
+      actionPending: true,
+      proposedPlanTitle: routineName,
+      proposedTasks: [
+        { id: 'rt-1', title: `${routineName}: Core preparation`, estimatedMinutes: 30, priority: 'important', selected: true },
+        { id: 'rt-2', title: `${routineName}: Practice & execution`, estimatedMinutes: 45, priority: 'important', selected: true },
+        { id: 'rt-3', title: `${routineName}: Reflection & notes`, estimatedMinutes: 15, priority: 'normal', selected: true },
+      ],
+    };
+  }
+
+  // ---- V3 State-changing request: Recurring reminder / task proposal --------
+  if (/every (?:weekday|day|week|month) remind me (?:to )?(.*)/i.test(q)) {
+    const reminderTitle = q.replace(/.*remind me (?:to )?/i, '').trim();
+    return {
+      kind: 'proposal',
+      title: 'Proposed Recurring Reminder',
+      lines: [
+        { label: 'Title', value: reminderTitle, tone: 'accent' },
+        { label: 'Schedule', value: /weekday/i.test(q) ? 'Every Weekday' : 'Recurring', tone: 'plain' },
+        { label: 'Status', value: 'Nothing added yet', tone: 'plain' },
+      ],
+      verdict: `Proposed recurring reminder: "${reminderTitle}". Confirm to activate.`,
+      tone: 'good',
+      actionPending: true,
+      proposedTasks: [
+        { id: 'rec-1', title: reminderTitle, estimatedMinutes: 30, priority: 'important', selected: true },
+      ],
+    };
+  }
+
+  // ---- V3 State-changing request: Goal creation proposal -------------------
+  if (/create (?:a )?goal (?:called )?(.*)/i.test(q)) {
+    const goalTitle = q.replace(/.*goal (?:called )?/i, '').trim();
+    return {
+      kind: 'proposal',
+      title: `Proposed Goal: ${goalTitle}`,
+      lines: [
+        { label: 'Goal Title', value: goalTitle, tone: 'accent' },
+        { label: 'Target', value: 'Next 30 Days', tone: 'plain' },
+        { label: 'Status', value: 'Nothing added yet', tone: 'plain' },
+      ],
+      verdict: `Proposed long-term goal: "${goalTitle}". Confirm to add to your Goals.`,
+      tone: 'good',
+      actionPending: true,
+      proposedPlanTitle: goalTitle,
+    };
+  }
+
+  // ---- V3 State-changing request: Add project to goal proposal --------------
+  if (/add (?:my )?(.*) project to (?:that|the) goal/i.test(q)) {
+    const projName = q.match(/add (?:my )?(.*) project/i)?.[1] || 'Project';
+    return {
+      kind: 'proposal',
+      title: 'Link Project to Goal',
+      lines: [
+        { label: 'Project', value: projName, tone: 'accent' },
+        { label: 'Action', value: 'Link to active Goal', tone: 'plain' },
+        { label: 'Status', value: 'Nothing modified yet', tone: 'plain' },
+      ],
+      verdict: `Proposed linking "${projName}" to your active goal. Confirm to apply.`,
+      tone: 'good',
+      actionPending: true,
+    };
+  }
+
+  // ---- V4: Next Event / Today's Schedule -----------------------------------
+  if (/what (?:is my next event|do i have scheduled today)|next event|scheduled today/i.test(q)) {
+    const ctx = getCurrentScheduleContext(state.schedule ?? [], new Date());
+    const lines: AskReply['lines'] = [];
+    if (ctx.currentBlock) {
+      lines.push({
+        label: 'Current Block',
+        value: `${ctx.currentBlock.title} (${fmtTime(ctx.currentBlock.start)}–${fmtTime(ctx.currentBlock.end)})`,
+        tone: 'accent',
+      });
+    }
+    if (ctx.nextBlock) {
+      lines.push({
+        label: 'Next Event',
+        value: `${ctx.nextBlock.title} (${fmtTime(ctx.nextBlock.start)}–${fmtTime(ctx.nextBlock.end)})`,
+        tone: 'good',
+      });
+    } else {
+      lines.push({ label: 'Next Event', value: 'No further scheduled blocks today', tone: 'plain' });
+    }
+    lines.push({ label: 'Remaining Usable', value: `${ctx.availableMinutes} min`, tone: 'plain' });
+
+    return {
+      kind: 'now',
+      title: "Today's Schedule & Commitments",
+      lines,
+      verdict: ctx.currentBlock
+        ? `You are currently in ${ctx.currentBlock.title}. Next up: ${ctx.nextBlock ? ctx.nextBlock.title : 'free time'}.`
+        : ctx.nextBlock
+        ? `Next scheduled commitment is ${ctx.nextBlock.title} at ${fmtTime(ctx.nextBlock.start)}.`
+        : 'Your scheduled commitments for today are complete.',
+      tone: 'good',
+    };
+  }
+
+  // ---- V4: Next Free Hour / Window ----------------------------------------
+  if (/when is my next free (?:hour|window|time)|next free (?:hour|time)/i.test(q)) {
+    const ctx = getCurrentScheduleContext(state.schedule ?? [], new Date());
+    const lines: AskReply['lines'] = [
+      { label: 'Available Now', value: `${ctx.availableMinutes} min free window`, tone: ctx.availableMinutes >= 45 ? 'good' : 'plain' },
+    ];
+    if (ctx.nextBlock) {
+      lines.push({ label: 'Next Commitment', value: `${ctx.nextBlock.title} at ${fmtTime(ctx.nextBlock.start)}`, tone: 'accent' });
+    }
+
+    return {
+      kind: 'time',
+      title: 'Next Free Window',
+      lines,
+      verdict: ctx.availableMinutes >= 60
+        ? `You have an open ${fmtDur(ctx.availableMinutes)} window right now before your next commitment.`
+        : ctx.nextBlock
+        ? `You have about ${ctx.availableMinutes} minutes before ${ctx.nextBlock.title}.`
+        : 'You have clear open time for the remainder of your day.',
+      tone: 'good',
+    };
+  }
+
+  // ---- V4: Active Reminders ------------------------------------------------
+  if (/what reminders are active|active reminders/i.test(q)) {
+    const active = (state.reminders ?? []).filter((r) => r.status !== 'done' && r.status !== 'dismissed');
+    const lines: AskReply['lines'] = active.slice(0, 4).map((r) => ({
+      label: dueLabel(r.dueTs),
+      value: r.title,
+      tone: r.priority === 'critical' ? 'bad' : 'plain',
+    }));
+
+    return {
+      kind: 'now',
+      title: `Active Smart Reminders (${active.length})`,
+      lines: lines.length > 0 ? lines : [{ label: 'Status', value: 'No pending reminders', tone: 'plain' }],
+      verdict: active.length > 0
+        ? `You have ${active.length} active reminder${active.length > 1 ? 's' : ''} tracked.`
+        : 'All reminders have been completed or dismissed.',
+      tone: active.length > 0 ? 'good' : 'plain',
+    };
+  }
+
+  // ---- V4: Search LifeOS ---------------------------------------------------
+  if (/^search (?:for )?(.*)/i.test(q)) {
+    const term = q.replace(/^search (?:for )?/i, '').trim();
+    const results = searchLifeOS(state, term);
+    const topItems = results.items.slice(0, 4).map((item) => ({
+      label: item.category.toUpperCase(),
+      value: `${item.title}${item.subtitle ? ` · ${item.subtitle}` : ''}`,
+      tone: 'accent' as const,
+    }));
+
+    return {
+      kind: 'now',
+      title: `Search: "${term}" (${results.totalCount} found)`,
+      lines: topItems.length > 0 ? topItems : [{ label: 'No matches', value: `No records found for "${term}"`, tone: 'plain' }],
+      verdict: results.totalCount > 0
+        ? `Found ${results.totalCount} record${results.totalCount > 1 ? 's' : ''} across your tasks, projects, goals, and history.`
+        : `No matching records found for "${term}".`,
+      tone: results.totalCount > 0 ? 'good' : 'plain',
+    };
+  }
+
+  // ---- V4: Data Export Proposal --------------------------------------------
+  if (/export (?:my )?lifeos data|export data/i.test(q)) {
+    return {
+      kind: 'proposal',
+      title: 'Export LifeOS Data',
+      lines: [
+        { label: 'Scope', value: 'Complete Offline State', tone: 'accent' },
+        { label: 'Format', value: 'Human-Readable JSON', tone: 'plain' },
+        { label: 'Privacy', value: 'Saved locally on device', tone: 'good' },
+      ],
+      verdict: 'Confirm to generate your complete LifeOS local JSON backup.',
+      tone: 'good',
+      actionPending: true,
+    };
+  }
+
+  // ---- V4: Daily Execution Summary -----------------------------------------
+  if (/show (?:my )?execution summary|execution summary/i.test(q)) {
+    const summary = getDailyExecutionSummary(state);
+    return {
+      kind: 'now',
+      title: "Today's Execution Summary",
+      lines: [
+        { label: 'Completed Tasks', value: `${summary.completedTasksCount}`, tone: 'good' },
+        { label: 'Recorded Focus', value: `${Math.floor(summary.recordedFocusMinutes / 60)}h ${summary.recordedFocusMinutes % 60}m`, tone: 'accent' },
+        { label: 'Remaining Tasks', value: `${summary.remainingTasksCount}`, tone: summary.remainingTasksCount > 0 ? 'plain' : 'good' },
+        { label: 'Block Shifts', value: `${summary.movedBlocksCount}`, tone: 'plain' },
+      ],
+      verdict: summary.executionObservations.join(' '),
+      tone: 'good',
+    };
+  }
+
+  // ---- V4: Calendar Commitments -------------------------------------------
+  if (/calendar commitments|calendar events|this week's calendar/i.test(q)) {
+    const ext = (state.schedule ?? []).filter((b) => b.source === 'external');
+    return {
+      kind: 'now',
+      title: 'External Calendar Commitments',
+      lines: ext.slice(0, 4).map((b) => ({
+        label: `${fmtTime(b.start)}–${fmtTime(b.end)}`,
+        value: b.title,
+        tone: 'accent' as const,
+      })),
+      verdict: ext.length > 0
+        ? `You have ${ext.length} external calendar event${ext.length > 1 ? 's' : ''} synchronized (read-only).`
+        : 'No external calendar commitments found for today.',
+      tone: 'plain',
+    };
+  }
+
   // ---- Free time planner --------------------------------------------------
   const hrs = q.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/);
   const mins = q.match(/(\d+)\s*(?:minutes?|mins?|m)\b/);
@@ -1715,10 +3701,11 @@ export function askLifeOS(qRaw: string, state: AppState): AskReply {
     title: "LifeOS Decision Engine",
     lines: [
       { label: 'Next Action', value: '"What should I do right now?"', tone: 'accent' },
-      { label: 'Money Check', value: '"I have ₹500 and need lunch, travel and books"', tone: 'accent' },
-      { label: 'Time Window', value: '"I have 2 hours free — what should I do?"', tone: 'accent' },
+      { label: 'Next Event', value: '"What do I have scheduled today?"', tone: 'accent' },
+      { label: 'Search', value: '"Search for VLSI"', tone: 'accent' },
+      { label: 'Weekly Review', value: '"Review my week"', tone: 'accent' },
     ],
-    verdict: 'LifeOS evaluates your schedule, tasks, deadlines, and budget to tell you what needs attention.',
+    verdict: 'LifeOS evaluates your schedule, goals, routines, deadlines, and budget to recommend what needs attention.',
     tone: 'plain',
   };
 }

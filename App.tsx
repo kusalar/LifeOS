@@ -1,19 +1,23 @@
+import 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import React, { useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { DarkTheme, NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AskSheet } from './src/components/AskSheet';
 import { ExpenseSheet } from './src/components/ExpenseSheet';
+import { BreakdownModal } from './src/components/BreakdownModal';
 import { FocusModal } from './src/components/FocusModal';
 import { HabitSheet } from './src/components/HabitSheet';
 import { HabitsModal } from './src/components/HabitsModal';
 import { NowModal } from './src/components/NowModal';
 import { ProjectSheet } from './src/components/ProjectSheet';
 import { ReminderSheet } from './src/components/ReminderSheet';
+import { RescheduleModal } from './src/components/RescheduleModal';
 import { ReviewModal } from './src/components/ReviewModal';
 import { TabBar } from './src/components/TabBar';
 import { TaskSheet } from './src/components/TaskSheet';
@@ -24,7 +28,7 @@ import { ProjectsScreen } from './src/screens/ProjectsScreen';
 import { ReportScreen } from './src/screens/ReportScreen';
 import { TodayScreen } from './src/screens/TodayScreen';
 import { C } from './src/theme';
-import type { Habit, Project, Task } from './src/types';
+import type { AdaptiveProposal, Habit, Project, Task } from './src/types';
 
 const Tab = createBottomTabNavigator();
 
@@ -86,6 +90,14 @@ function Root() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewDateKey, setReviewDateKey] = useState<string | undefined>(undefined);
 
+  // V2 Adaptive Rescheduling and Smart Breakdown state
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [breakdownInput, setBreakdownInput] = useState<string | undefined>(undefined);
+  const [breakdownProjId, setBreakdownProjId] = useState<string | undefined>(undefined);
+
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [rescheduleProposal, setRescheduleProposal] = useState<AdaptiveProposal | null>(null);
+
   // Preload icon fonts for web
   const [fontsLoaded] = useFonts({ ...Ionicons.font });
 
@@ -117,6 +129,17 @@ function Root() {
     setReviewOpen(true);
   };
 
+  const handleOpenBreakdown = (initialInput?: string, projectId?: string) => {
+    setBreakdownInput(initialInput);
+    setBreakdownProjId(projectId);
+    setBreakdownOpen(true);
+  };
+
+  const handleOpenReschedule = (proposal?: AdaptiveProposal) => {
+    setRescheduleProposal(proposal || null);
+    setRescheduleOpen(true);
+  };
+
   return (
     <UIContext.Provider
       value={{
@@ -130,6 +153,9 @@ function Root() {
         openHabitSheet: handleOpenHabit,
         openReviewModal: handleOpenReview,
         openHabitsModal: () => setHabitsModalOpen(true),
+        openBreakdownModal: handleOpenBreakdown,
+        openRescheduleModal: handleOpenReschedule,
+        openWeeklyPlanModal: () => {},
       }}
     >
       <SafeAreaProvider>
@@ -192,6 +218,24 @@ function Root() {
             setReviewDateKey(undefined);
           }}
         />
+        <BreakdownModal
+          visible={breakdownOpen}
+          initialInput={breakdownInput}
+          projectId={breakdownProjId}
+          onClose={() => {
+            setBreakdownOpen(false);
+            setBreakdownInput(undefined);
+            setBreakdownProjId(undefined);
+          }}
+        />
+        <RescheduleModal
+          visible={rescheduleOpen}
+          proposal={rescheduleProposal}
+          onClose={() => {
+            setRescheduleOpen(false);
+            setRescheduleProposal(null);
+          }}
+        />
 
         <StatusBar style="light" />
       </SafeAreaProvider>
@@ -201,8 +245,10 @@ function Root() {
 
 export default function App() {
   return (
-    <StoreProvider>
-      <Root />
-    </StoreProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <StoreProvider>
+        <Root />
+      </StoreProvider>
+    </GestureHandlerRootView>
   );
 }

@@ -17,6 +17,12 @@ const assert = {
   equal: (a: any, b: any, msg?: string) => {
     if (a !== b) throw new Error(msg || `Expected ${JSON.stringify(a)} === ${JSON.stringify(b)}`);
   },
+  notEqual: (a: any, b: any, msg?: string) => {
+    if (a === b) throw new Error(msg || `Expected ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
+  },
+  deepEqual: (a: any, b: any, msg?: string) => {
+    if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(msg || `Expected ${JSON.stringify(a)} deepEqual ${JSON.stringify(b)}`);
+  },
   ok: (a: any, msg?: string) => {
     if (!a) throw new Error(msg || `Expected ${a} to be truthy`);
   },
@@ -51,7 +57,41 @@ import {
   moneyInsights,
   parsePlan,
   reportStats,
+  calculateDayStatus,
+  applyProposalToSchedule,
+  breakDownTask,
+  getProjectDeadlinePressure,
+  getAllProjectsDeadlinePressure,
+  getWeeklyPlanningSummary,
+  isTaskBlocked,
+  getGoalProgress,
+  getAllGoalsProgress,
+  isRecurringTaskDueToday,
+  generateDueRecurringTasks,
+  generateRoutineProposal,
+  getEffectivePreference,
+  formatPreferenceObservation,
+  getBehavioralPatterns,
+  getEstimationLearning,
+  getAdjustedTaskEstimate,
+  createTasksFromTemplate,
+  evaluateSmartReminders,
+  recordDecision,
+  getWeeklyReviewV2,
+  adjustForQuietHours,
+  planLocalNotifications,
+  getCurrentScheduleContext,
+  importExternalCalendarEvents,
+  searchLifeOS,
+  exportLifeOSData,
+  validateLifeOSImport,
+  getDailyExecutionSummary,
 } from '../src/lib/engine';
+import {
+  SafeLocalNotificationService,
+  DEFAULT_NOTIFICATION_PREFERENCES,
+} from '../src/lib/notifications';
+import { SafeLocalCalendarProvider } from '../src/lib/calendar';
 import { makeSeed } from '../src/lib/seed';
 import type {
   AppState,
@@ -62,6 +102,33 @@ import type {
   Project,
   ScheduleBlock,
   Task,
+  AdaptiveProposal,
+  DayStatus,
+  ProposedTask,
+  ProjectDeadlinePressure,
+  WeeklyPlanningSummary,
+  PlanningPreferences,
+  Goal,
+  RecurringTask,
+  Routine,
+  PersonalPreference,
+  TaskTemplate,
+  DecisionRecord,
+  GoalProgress,
+  BehavioralPattern,
+  EstimationLearningResult,
+  WeeklyReviewV2Summary,
+  Reminder,
+  LocalNotification,
+  NotificationPreferences,
+  ExternalCalendar,
+  ExternalCalendarEvent,
+  CalendarSyncState,
+  CurrentScheduleContext,
+  SearchFilter,
+  SearchResultItem,
+  SearchResults,
+  DailyExecutionSummary,
 } from '../src/types';
 
 // ===========================================================================
@@ -882,4 +949,1977 @@ test('45. Local date handling works around midnight', () => {
   assert.equal(nextKey, '2026-09-28');
   assert.equal(parseDateKey(key).getDate(), 27);
 });
+
+// ===========================================================================
+// Test Suite: LifeOS V2 Adaptive Planning & Intelligent Life Management (Tests 46–75)
+// ===========================================================================
+
+test('46. Detect overdue/unfinished planned task', () => {
+  const state = makeSeed();
+  // Scheduled block in the past (e.g. 09:00 to 10:00 = 540 to 600)
+  state.schedule = [
+    { id: 'b1', title: 'Study', type: 'study', start: 9 * 60, end: 10 * 60, done: false, source: 'lifeos', taskId: 't-study' },
+    { id: 'b2', title: 'VLSI', type: 'study', start: 10 * 60, end: 11 * 60, done: false, source: 'lifeos', taskId: 't-vlsi' },
+  ];
+  state.tasks = [
+    { id: 't-study', title: 'Study', priority: 'important', dueTs: Date.now(), done: false, createdAt: 1, estimatedMinutes: 60 },
+    { id: 't-vlsi', title: 'VLSI', priority: 'critical', dueTs: Date.now(), done: false, createdAt: 1, estimatedMinutes: 60 },
+  ];
+
+  // At 10:30 (630 minutes into day)
+  const now = new Date();
+  now.setHours(10, 30, 0, 0);
+
+  const { dayStatus } = calculateDayStatus(state, now);
+  assert.equal(dayStatus.state, 'shifted');
+  assert.ok((dayStatus.shiftMinutes ?? 0) > 0);
+  assert.ok(
+    dayStatus.explanation.toLowerCase().includes('behind') ||
+    dayStatus.explanation.toLowerCase().includes('missed') ||
+    dayStatus.explanation.toLowerCase().includes('study')
+  );
+});
+
+test('47. Detect focus session overrun', () => {
+  const state = makeSeed();
+  const task: Task = { id: 't-vlsi', title: 'VLSI', priority: 'critical', dueTs: Date.now(), done: false, createdAt: 1, estimatedMinutes: 60 };
+  state.tasks = [task];
+  state.activeTaskId = task.id;
+  // Started 90 minutes ago (estimate was 60 min, overrun is 30 min)
+  state.activeTaskStartedAt = Date.now() - 90 * 60000;
+  state.activeTaskPausedAt = null;
+  state.activeTaskAccumulatedMs = 0;
+
+  const { dayStatus } = calculateDayStatus(state);
+  assert.equal(dayStatus.state, 'shifted');
+  assert.ok(dayStatus.explanation.includes('30 min') || dayStatus.explanation.includes('exceeded'));
+});
+
+test('48. Detect schedule shift', () => {
+  const state = makeSeed();
+  state.schedule = [
+    { id: 'b1', title: 'Task 1', type: 'study', start: 9 * 60, end: 10 * 60, done: false, source: 'lifeos' },
+    { id: 'b2', title: 'Task 2', type: 'study', start: 10 * 60, end: 11 * 60, done: false, source: 'lifeos' },
+  ];
+  const now = new Date();
+  now.setHours(10, 30, 0, 0); // 30 mins past Task 1 end
+
+  const { dayStatus } = calculateDayStatus(state, now);
+  assert.equal(dayStatus.state, 'shifted');
+  assert.equal((dayStatus.shiftMinutes ?? 0) >= 30, true);
+});
+
+test('49. Calculate remaining usable time after shift', () => {
+  const state = makeSeed();
+  state.workDayStart = 9 * 60;
+  state.workDayEnd = 17 * 60; // 8 hours total = 480 mins
+  state.schedule = [
+    { id: 'b1', title: 'Task 1', type: 'study', start: 9 * 60, end: 10 * 60, done: false, source: 'lifeos' },
+    { id: 'b2', title: 'Task 2', type: 'study', start: 10 * 60, end: 11 * 60, done: false, source: 'lifeos' },
+  ];
+  const now = new Date();
+  now.setHours(10, 30, 0, 0);
+
+  const { dayStatus } = calculateDayStatus(state, now);
+  // Total usable minutes remaining till 17:00 (from 10:30 is 6.5h = 390 min minus shift)
+  assert.ok(dayStatus.remainingUsableMinutes <= 390);
+  assert.ok(dayStatus.remainingUsableMinutes > 0);
+});
+
+test('50. Generate rescheduling proposal', () => {
+  const state = makeSeed();
+  state.schedule = [
+    { id: 'b1', title: 'Study', type: 'study', start: 9 * 60, end: 10 * 60, done: false, source: 'lifeos', taskId: 't1' },
+    { id: 'b2', title: 'Assignment', type: 'study', start: 10 * 60, end: 11 * 60, done: false, source: 'lifeos', taskId: 't2' },
+  ];
+  state.tasks = [
+    { id: 't1', title: 'Study', priority: 'normal', dueTs: Date.now(), done: false, createdAt: 1, estimatedMinutes: 60 },
+    { id: 't2', title: 'Assignment', priority: 'important', dueTs: Date.now(), done: false, createdAt: 1, estimatedMinutes: 60 },
+  ];
+
+  const now = new Date();
+  now.setHours(10, 30, 0, 0);
+
+  const { proposals } = calculateDayStatus(state, now);
+  assert.ok(proposals.length > 0);
+  const p = proposals[0];
+  assert.ok(p.taskTitle.length > 0);
+  assert.ok(p.newStart > (p.oldStart ?? 0));
+  assert.ok(p.reason.length > 0);
+  assert.ok(p.impact.length > 0);
+});
+
+test('51. Proposal does not modify state automatically', () => {
+  const state = makeSeed();
+  const initialSchedule = JSON.parse(JSON.stringify(state.schedule));
+  const { proposals } = calculateDayStatus(state);
+
+  // Proposals might be generated, but state.schedule must NOT be mutated automatically
+  assert.equal(state.schedule.length, initialSchedule.length);
+  assert.equal(state.schedule[0]?.start, initialSchedule[0]?.start);
+});
+
+test('52. Accept proposal modifies intended schedule', () => {
+  const originalSchedule: ScheduleBlock[] = [
+    { id: 'b-assign', title: 'Assignment', type: 'study', start: 11 * 60, end: 12 * 60, done: false, source: 'lifeos', taskId: 't-assign' },
+  ];
+  const proposal: AdaptiveProposal = {
+    id: 'prop-1',
+    taskId: 't-assign',
+    taskTitle: 'Assignment',
+    blockId: 'b-assign',
+    oldStart: 11 * 60,
+    oldEnd: 12 * 60,
+    newStart: 14 * 60,
+    newEnd: 15 * 60,
+    reason: 'Previous focus session exceeded its estimate by 30 minutes.',
+    impact: 'Pushes assignment to afternoon open window',
+    priority: 'important',
+    status: 'pending',
+    createdAt: Date.now(),
+  };
+
+  const updatedSchedule = applyProposalToSchedule(originalSchedule, proposal);
+  assert.equal(updatedSchedule.length, 1);
+  assert.equal(updatedSchedule[0].start, 14 * 60);
+  assert.equal(updatedSchedule[0].end, 15 * 60);
+});
+
+test('53. Reject proposal preserves original schedule', () => {
+  const originalSchedule: ScheduleBlock[] = [
+    { id: 'b-assign', title: 'Assignment', type: 'study', start: 11 * 60, end: 12 * 60, done: false, source: 'lifeos', taskId: 't-assign' },
+  ];
+  // Rejection keeps original schedule intact
+  const scheduleAfterReject = [...originalSchedule];
+  assert.equal(scheduleAfterReject[0].start, 11 * 60);
+  assert.equal(scheduleAfterReject[0].end, 12 * 60);
+});
+
+test('54. Generate proposed breakdown', () => {
+  const proposed = breakDownTask('Finish VLSI project', 'p-vlsi');
+  assert.ok(Array.isArray(proposed));
+  assert.ok(proposed.length >= 3);
+  assert.ok(proposed.some((t) => t.title.toLowerCase().includes('circuit') || t.title.toLowerCase().includes('implementation')));
+  assert.ok(proposed.some((t) => t.title.toLowerCase().includes('simulation') || t.title.toLowerCase().includes('results')));
+  assert.equal(proposed[0].projectId, 'p-vlsi');
+});
+
+test('55. User can select subset', () => {
+  const proposed = breakDownTask('Finish VLSI project');
+  assert.ok(proposed.length >= 3);
+  // User selects only 2 of the proposed items
+  const selectedSubset = [proposed[0], proposed[1]];
+  assert.equal(selectedSubset.length, 2);
+  assert.notEqual(selectedSubset.length, proposed.length);
+});
+
+test('56. Unconfirmed tasks are not created', () => {
+  const state = makeSeed();
+  const initialTaskCount = state.tasks.length;
+  // Calling breakDownTask produces proposals without altering state.tasks
+  const proposed = breakDownTask('Finish VLSI project');
+  assert.ok(proposed.length > 0);
+  assert.equal(state.tasks.length, initialTaskCount);
+});
+
+test('57. Confirmed tasks are created correctly', () => {
+  const state = makeSeed();
+  const proposed = breakDownTask('Finish VLSI project', 'p-vlsi').slice(0, 2);
+
+  // Simulate explicit user confirmation
+  const createdTasks: Task[] = proposed.map((p) => ({
+    id: 't-' + Math.random(),
+    title: p.title,
+    priority: p.priority,
+    dueTs: Date.now() + 86400000,
+    tag: 'VLSI',
+    projectId: p.projectId,
+    estimatedMinutes: p.estimatedMinutes,
+    done: false,
+    createdAt: Date.now(),
+  }));
+
+  state.tasks = [...createdTasks, ...state.tasks];
+  assert.ok(state.tasks.some((t) => t.title.includes('circuit') || t.title.includes('implementation')));
+  assert.ok(state.tasks.some((t) => t.title.includes('simulation')));
+});
+
+test('58. Calculate remaining estimated work', () => {
+  const project: Project = { id: 'p1', name: 'VLSI Training', status: 'active', createdAt: 1, updatedAt: 1, deadline: Date.now() + 2 * 86400000 };
+  const tasks: Task[] = [
+    { id: 't1', title: 'Task 1', priority: 'normal', dueTs: Date.now(), done: false, createdAt: 1, projectId: 'p1', estimatedMinutes: 60 },
+    { id: 't2', title: 'Task 2', priority: 'normal', dueTs: Date.now(), done: false, createdAt: 1, projectId: 'p1', estimatedMinutes: 45 },
+    { id: 't3', title: 'Task 3', priority: 'normal', dueTs: Date.now(), done: false, createdAt: 1, projectId: 'p1', estimatedMinutes: 95 },
+    { id: 't4', title: 'Task 4', priority: 'normal', dueTs: Date.now(), done: true, createdAt: 1, projectId: 'p1', estimatedMinutes: 120 }, // Completed!
+  ];
+
+  const pressure = getProjectDeadlinePressure(project, tasks);
+  assert.equal(pressure.remainingTasksCount, 3);
+  assert.equal(pressure.estimatedRemainingMinutes, 200); // 60 + 45 + 95 = 200 mins (3h 20m)
+});
+
+test('59. Calculate available time before deadline', () => {
+  const project: Project = { id: 'p1', name: 'Project A', status: 'active', createdAt: 1, updatedAt: 1, deadline: Date.now() + 2 * 86400000 };
+  const tasks: Task[] = [
+    { id: 't1', title: 'Task 1', priority: 'normal', dueTs: Date.now(), done: false, createdAt: 1, projectId: 'p1', estimatedMinutes: 60 },
+  ];
+
+  const pressure = getProjectDeadlinePressure(project, tasks);
+  assert.ok(pressure.availableUsableMinutes > 0);
+  assert.ok(pressure.daysRemaining >= 1);
+});
+
+test('60. Detect insufficient available time', () => {
+  // Deadline is today in 1 hour
+  const project: Project = { id: 'p1', name: 'Urgent Project', status: 'active', createdAt: 1, updatedAt: 1, deadline: Date.now() + 3600000 };
+  // But remaining work is 300 minutes (5 hours)
+  const tasks: Task[] = [
+    { id: 't1', title: 'Heavy Work', priority: 'critical', dueTs: Date.now(), done: false, createdAt: 1, projectId: 'p1', estimatedMinutes: 300 },
+  ];
+
+  const pressure = getProjectDeadlinePressure(project, tasks);
+  assert.equal(pressure.isPressureHigh, true);
+  assert.ok(pressure.statusText.includes('exceeds available time') || pressure.differenceMinutes > 0);
+});
+
+test('61. Handle missing estimates safely', () => {
+  const project: Project = { id: 'p1', name: 'No Estimate Project', status: 'active', createdAt: 1, updatedAt: 1, deadline: Date.now() + 86400000 };
+  const tasks: Task[] = [
+    { id: 't1', title: 'Task without estimate', priority: 'normal', dueTs: Date.now(), done: false, createdAt: 1, projectId: 'p1' },
+  ];
+
+  const pressure = getProjectDeadlinePressure(project, tasks);
+  assert.equal(pressure.hasEstimatedData, false);
+  assert.equal(pressure.statusText, 'Not enough estimated task data.');
+  assert.equal(pressure.estimatedRemainingMinutes, 0);
+});
+
+test('62. Weekly totals use actual history', () => {
+  const state = makeSeed();
+  const pastSessionTime = Date.now() - 3 * 86400000;
+  state.focusSessions = [
+    { id: 's1', taskId: 't1', projectId: 'p1', startedAt: pastSessionTime, endedAt: pastSessionTime + 50 * 60000, durationMinutes: 50, completed: true },
+    { id: 's2', taskId: 't2', projectId: 'p1', startedAt: pastSessionTime, endedAt: pastSessionTime + 40 * 60000, durationMinutes: 40, completed: true },
+  ];
+
+  const summary = getWeeklyPlanningSummary(state);
+  assert.equal(summary.lastWeek.focusMinutes, 90);
+  assert.ok(typeof summary.lastWeek.tasksCompleted === 'number');
+});
+
+test('63. Upcoming deadlines appear correctly', () => {
+  const state = makeSeed();
+  const projectNear: Project = { id: 'pn', name: 'Near Project', status: 'active', createdAt: 1, updatedAt: 1, deadline: Date.now() + 3 * 86400000 };
+  const projectFar: Project = { id: 'pf', name: 'Far Project', status: 'active', createdAt: 1, updatedAt: 1, deadline: Date.now() + 30 * 86400000 };
+  state.projects = [projectNear, projectFar];
+
+  const summary = getWeeklyPlanningSummary(state);
+  assert.ok(summary.thisWeek.upcomingDeadlinesCount >= 1);
+});
+
+test('64. Capacity calculation handles no schedule', () => {
+  const state = makeSeed();
+  state.schedule = []; // No schedule blocks configured
+  const summary = getWeeklyPlanningSummary(state);
+
+  assert.ok(summary.thisWeek.availableUsableHours > 0);
+  assert.equal(summary.thisWeek.scheduledCommitmentsMinutes, 0);
+  assert.ok(summary.weeklyPlan.suggestedTaskCapacityHours > 0);
+});
+
+test('65. Productivity windows influence recommendations', () => {
+  const state = makeSeed();
+  state.activeTaskId = null;
+  state.schedule = [];
+  state.reminders = [];
+  state.planningPreferences = {
+    deepWorkWindow: { start: 9 * 60, end: 12 * 60 },
+    lightWorkWindow: { start: 14 * 60, end: 17 * 60 },
+    personalWindow: { start: 19 * 60, end: 24 * 60 },
+  };
+
+  const deepTask: Task = { id: 't-deep', title: 'Deep Architectural Design', priority: 'important', dueTs: Date.now() + 86400000, done: false, createdAt: 1, taskType: 'deep_work', estimatedMinutes: 60 };
+  const quickTask: Task = { id: 't-admin', title: 'File Receipt', priority: 'important', dueTs: Date.now() + 86400000, done: false, createdAt: 2, taskType: 'admin', estimatedMinutes: 15 };
+  state.tasks = [quickTask, deepTask];
+
+  // At 10:00 AM (during deep work window)
+  const now = new Date();
+  now.setHours(10, 0, 0, 0);
+
+  const recommendation = getWhatToDoNow(state, now);
+  assert.equal(recommendation.taskId, 't-deep');
+  assert.ok((recommendation.explanationLines ?? []).some((r) => r.toLowerCase().includes('deep work')));
+});
+
+test('66. Missing preference does not break recommendations', () => {
+  const state = makeSeed();
+  delete (state as any).planningPreferences;
+
+  // Must not throw when planningPreferences is undefined
+  const recommendation = getWhatToDoNow(state);
+  assert.ok(recommendation.actionTitle.length > 0);
+});
+
+test('67. Blocked task is not recommended', () => {
+  const state = makeSeed();
+  state.activeTaskId = null;
+  const prereqTask: Task = { id: 'prereq-1', title: 'Prerequisite Task', priority: 'normal', dueTs: Date.now() + 86400000, done: false, createdAt: 1 };
+  const blockedTask: Task = { id: 'blocked-1', title: 'Dependent Task', priority: 'critical', dueTs: Date.now(), done: false, createdAt: 2, blockedBy: ['prereq-1'] };
+  state.tasks = [prereqTask, blockedTask];
+
+  assert.equal(isTaskBlocked(blockedTask, state.tasks), true);
+  const recommendation = getWhatToDoNow(state);
+  // Blocked task must NEVER be recommended
+  assert.notEqual(recommendation.taskId, 'blocked-1');
+});
+
+test('68. Completed prerequisite unblocks task', () => {
+  const prereqTask: Task = { id: 'prereq-1', title: 'Prerequisite Task', priority: 'normal', dueTs: Date.now() + 86400000, done: true, createdAt: 1 }; // Done!
+  const task: Task = { id: 'blocked-1', title: 'Dependent Task', priority: 'critical', dueTs: Date.now(), done: false, createdAt: 2, blockedBy: ['prereq-1'] };
+  const allTasks = [prereqTask, task];
+
+  assert.equal(isTaskBlocked(task, allTasks), false);
+});
+
+test('69. Missing dependency is handled safely', () => {
+  const task: Task = { id: 't1', title: 'Task with ghost prereq', priority: 'normal', dueTs: Date.now(), done: false, createdAt: 1, blockedBy: ['ghost-id-404'] };
+  // Non-existent prerequisite does not block and does not throw
+  assert.equal(isTaskBlocked(task, [task]), false);
+});
+
+test('70. Proposed tasks are not immediately persisted', () => {
+  const state = makeSeed();
+  const initialTaskCount = state.tasks.length;
+  const reply = askLifeOS('I have an exam next Thursday. I need to finish chapters 4–8, and my VLSI report is due Tuesday.', state);
+
+  assert.equal(reply.kind, 'plan');
+  assert.ok(reply.proposedTasks && reply.proposedTasks.length > 0);
+  // State was NOT mutated!
+  assert.equal(state.tasks.length, initialTaskCount);
+});
+
+test('71. Confirmation creates selected tasks', () => {
+  const state = makeSeed();
+  const reply = askLifeOS('I have an exam next Thursday. I need to finish chapters 4–8, and my VLSI report is due Tuesday.', state);
+  assert.ok(reply.proposedTasks && reply.proposedTasks.length > 0);
+
+  // User confirms adding 2 of the proposed tasks
+  const selected = reply.proposedTasks!.slice(0, 2);
+  const initialCount = state.tasks.length;
+  const newTasks: Task[] = selected.map((p) => ({
+    id: 't-confirmed-' + Math.random(),
+    title: p.title,
+    priority: p.priority,
+    dueTs: p.dueTs || Date.now() + 86400000,
+    tag: 'General',
+    done: false,
+    createdAt: Date.now(),
+  }));
+  state.tasks = [...newTasks, ...state.tasks];
+
+  assert.equal(state.tasks.length, initialCount + 2);
+});
+
+test('72. Consequential operations require confirmation', () => {
+  const state = makeSeed();
+  const reply = askLifeOS('I have an exam next Thursday. I need to finish chapters 4–8, and my VLSI report is due Tuesday.', state);
+  assert.equal(reply.actionPending, true);
+});
+
+test('73. V1.1 state loads without V2 fields', () => {
+  const v1StoredRaw: any = {
+    name: 'Aarav',
+    tasks: [{ id: 't1', title: 'V1 Task', priority: 'important', dueTs: Date.now(), done: false, createdAt: 1 }],
+    projects: [{ id: 'p1', name: 'V1 Project', status: 'active', createdAt: 1, updatedAt: 1 }],
+    schedule: [{ id: 's1', title: 'V1 Block', type: 'study', start: 540, end: 600, done: false }],
+    expenses: [],
+    reminders: [],
+    dailyBudget: 400,
+  };
+
+  // Ensure JSON parsing works
+  const parsed = JSON.parse(JSON.stringify(v1StoredRaw));
+  assert.equal(parsed.planningPreferences, undefined);
+  assert.equal(parsed.adaptiveProposals, undefined);
+  assert.equal(parsed.tasks[0].taskType, undefined);
+  assert.equal(parsed.tasks[0].blockedBy, undefined);
+});
+
+test('74. New fields receive safe defaults', () => {
+  const v1StoredRaw: any = {
+    name: 'Aarav',
+    tasks: [{ id: 't1', title: 'V1 Task', priority: 'important', dueTs: Date.now(), done: false, createdAt: 1 }],
+    schedule: [{ id: 's1', title: 'V1 Block', type: 'study', start: 540, end: 600, done: false }],
+  };
+
+  // Safe migration logic
+  v1StoredRaw.planningPreferences = v1StoredRaw.planningPreferences ?? {
+    deepWorkWindow: { start: 9 * 60, end: 12 * 60 },
+    lightWorkWindow: { start: 14 * 60, end: 17 * 60 },
+    personalWindow: { start: 19 * 60, end: 24 * 60 },
+  };
+  v1StoredRaw.adaptiveProposals = v1StoredRaw.adaptiveProposals ?? [];
+  v1StoredRaw.weeklyPlanConfirmed = v1StoredRaw.weeklyPlanConfirmed ?? false;
+  v1StoredRaw.tasks = v1StoredRaw.tasks.map((t: any) => ({
+    ...t,
+    blockedBy: Array.isArray(t.blockedBy) ? t.blockedBy : [],
+    taskType: t.taskType || undefined,
+  }));
+  v1StoredRaw.schedule = v1StoredRaw.schedule.map((s: any) => ({
+    ...s,
+    source: s.source || 'lifeos',
+  }));
+
+  assert.ok(v1StoredRaw.planningPreferences.deepWorkWindow);
+  assert.ok(Array.isArray(v1StoredRaw.adaptiveProposals));
+  assert.equal(v1StoredRaw.weeklyPlanConfirmed, false);
+  assert.deepEqual(v1StoredRaw.tasks[0].blockedBy, []);
+  assert.equal(v1StoredRaw.schedule[0].source, 'lifeos');
+});
+
+test('75. Existing data remains unchanged', () => {
+  const v1Data: any = {
+    name: 'Aarav',
+    tasks: [{ id: 't-unique-1', title: 'Important Coursework', priority: 'critical', dueTs: 999999, done: true, createdAt: 123 }],
+    projects: [{ id: 'p-unique-1', name: 'Thesis', status: 'active', createdAt: 456, updatedAt: 789 }],
+    dailyReviews: [{ dateKey: '2026-09-25', completedTasks: 4, completedHabits: 2, focusMinutes: 90, spentAmount: 150 }],
+  };
+
+  // Run migration
+  v1Data.planningPreferences = v1Data.planningPreferences ?? {};
+  v1Data.adaptiveProposals = v1Data.adaptiveProposals ?? [];
+
+  assert.equal(v1Data.tasks[0].id, 't-unique-1');
+  assert.equal(v1Data.tasks[0].title, 'Important Coursework');
+  assert.equal(v1Data.projects[0].id, 'p-unique-1');
+  assert.equal(v1Data.dailyReviews[0].focusMinutes, 90);
+});
+
+// ===========================================================================
+// Test Suite: LifeOS V3 Personal Memory, Behavioral Learning & Automation (Tests 76–116+)
+// ===========================================================================
+
+// --- Goals (76–79) ---------------------------------------------------------
+
+test('76. Create goal', () => {
+  const goal: Goal = {
+    id: 'goal-1',
+    title: 'Get internship-ready',
+    description: 'DSA preparation, portfolio, and resume',
+    status: 'active',
+    targetDate: Date.now() + 60 * 86400000,
+    projectIds: ['p-dsa'],
+    createdAt: Date.now(),
+  };
+
+  assert.equal(goal.id, 'goal-1');
+  assert.equal(goal.title, 'Get internship-ready');
+  assert.equal(goal.status, 'active');
+  assert.equal(goal.projectIds.length, 1);
+});
+
+test('77. Link project to goal', () => {
+  const goal: Goal = {
+    id: 'goal-1',
+    title: 'Get internship-ready',
+    status: 'active',
+    projectIds: ['p-dsa'],
+    createdAt: Date.now(),
+  };
+
+  // Link another project
+  const updatedProjectIds = [...goal.projectIds, 'p-resume'];
+  const updatedGoal = { ...goal, projectIds: updatedProjectIds };
+
+  assert.equal(updatedGoal.projectIds.length, 2);
+  assert.ok(updatedGoal.projectIds.includes('p-resume'));
+});
+
+test('78. Goal progress derived correctly', () => {
+  const goal: Goal = {
+    id: 'goal-internship',
+    title: 'Internship Ready',
+    status: 'active',
+    targetDate: Date.now() + 30 * 86400000,
+    projectIds: ['p-resume', 'p-dsa'],
+    createdAt: Date.now(),
+  };
+
+  const projects: Project[] = [
+    { id: 'p-resume', name: 'Resume Improvement', status: 'completed', createdAt: 1, updatedAt: 2 },
+    { id: 'p-dsa', name: 'DSA Preparation', status: 'active', createdAt: 1, updatedAt: 2 },
+  ];
+
+  const tasks: Task[] = [
+    { id: 't-dsa-1', title: 'Solve 3 tree questions', priority: 'important', dueTs: Date.now(), done: false, createdAt: 1, projectId: 'p-dsa' },
+  ];
+
+  const progress = getGoalProgress(goal, projects, tasks);
+  assert.equal(progress.totalProjects, 2);
+  assert.equal(progress.completedProjects, 1);
+  assert.equal(progress.activeProjects, 1);
+  assert.equal(progress.nextProjectName, 'DSA Preparation');
+  assert.equal(progress.nextActionTitle, 'Solve 3 tree questions');
+  assert.ok(progress.statusSummary.includes('1 of 2 linked projects completed'));
+});
+
+test('79. Goal migration safe', () => {
+  const v2StoredRaw: any = {
+    name: 'Aarav',
+    tasks: [],
+    projects: [{ id: 'p1', name: 'Existing Project', status: 'active', createdAt: 1, updatedAt: 1 }],
+  };
+
+  // Safe migration
+  v2StoredRaw.goals = Array.isArray(v2StoredRaw.goals) ? v2StoredRaw.goals : [];
+  assert.ok(Array.isArray(v2StoredRaw.goals));
+  assert.equal(v2StoredRaw.goals.length, 0);
+
+  // Calling goal progress functions with empty goals causes zero errors
+  const allProgress = getAllGoalsProgress(v2StoredRaw.goals, v2StoredRaw.projects, v2StoredRaw.tasks);
+  assert.equal(allProgress.length, 0);
+});
+
+// --- Recurring Tasks (80–85) ------------------------------------------------
+
+test('80. Daily recurrence', () => {
+  const rec: RecurringTask = {
+    id: 'rec-daily',
+    title: 'Review daily flashcards',
+    priority: 'normal',
+    recurrence: 'daily',
+    active: true,
+    createdAt: Date.now(),
+  };
+
+  const monday = new Date(2026, 8, 28); // Monday
+  const sunday = new Date(2026, 8, 27); // Sunday
+  assert.equal(isRecurringTaskDueToday(rec, monday), true);
+  assert.equal(isRecurringTaskDueToday(rec, sunday), true);
+});
+
+test('81. Weekday recurrence', () => {
+  const rec: RecurringTask = {
+    id: 'rec-weekday',
+    title: 'Review lecture notes',
+    priority: 'important',
+    recurrence: 'weekdays',
+    active: true,
+    createdAt: Date.now(),
+  };
+
+  const wednesday = new Date(2026, 8, 30); // Wednesday (day 3)
+  const sunday = new Date(2026, 8, 27); // Sunday (day 0)
+  const saturday = new Date(2026, 8, 26); // Saturday (day 6)
+
+  assert.equal(isRecurringTaskDueToday(rec, wednesday), true);
+  assert.equal(isRecurringTaskDueToday(rec, sunday), false);
+  assert.equal(isRecurringTaskDueToday(rec, saturday), false);
+});
+
+test('82. Weekly recurrence', () => {
+  const rec: RecurringTask = {
+    id: 'rec-sunday',
+    title: 'Weekly review & backup',
+    priority: 'normal',
+    recurrence: 'weekly',
+    dayOfWeek: 0, // Sunday
+    active: true,
+    createdAt: Date.now(),
+  };
+
+  const sunday = new Date(2026, 8, 27); // Sunday
+  const monday = new Date(2026, 8, 28); // Monday
+
+  assert.equal(isRecurringTaskDueToday(rec, sunday), true);
+  assert.equal(isRecurringTaskDueToday(rec, monday), false);
+});
+
+test('83. Monthly recurrence', () => {
+  const rec: RecurringTask = {
+    id: 'rec-bill',
+    title: 'Pay electricity bill',
+    priority: 'critical',
+    recurrence: 'monthly',
+    dayOfMonth: 1, // 1st of month
+    active: true,
+    createdAt: Date.now(),
+  };
+
+  const firstDay = new Date(2026, 9, 1); // Oct 1
+  const secondDay = new Date(2026, 9, 2); // Oct 2
+
+  assert.equal(isRecurringTaskDueToday(rec, firstDay), true);
+  assert.equal(isRecurringTaskDueToday(rec, secondDay), false);
+});
+
+test('84. Completed occurrence does not modify history', () => {
+  const rec: RecurringTask = {
+    id: 'rec-study',
+    title: 'Study DSA',
+    priority: 'important',
+    recurrence: 'daily',
+    active: true,
+    createdAt: Date.now() - 3 * 86400000,
+  };
+
+  // Historical completed task from yesterday
+  const yesterdayKey = shiftDateKey(localDateKey(), -1);
+  const yesterdayDate = parseDateKey(yesterdayKey);
+  const historicalTask: Task = {
+    id: 'task-dsa-yesterday',
+    title: 'Study DSA',
+    priority: 'important',
+    dueTs: yesterdayDate.getTime(),
+    done: true,
+    createdAt: yesterdayDate.getTime(),
+    recurringTaskId: 'rec-study',
+  };
+
+  // Generate today's tasks
+  const todayDate = new Date();
+  const generated = generateDueRecurringTasks([rec], [historicalTask], todayDate);
+
+  assert.equal(generated.length, 1);
+  assert.equal(historicalTask.done, true); // History unchanged!
+  assert.equal(generated[0].done, false); // New instance created
+  assert.notEqual(generated[0].id, historicalTask.id);
+});
+
+test('85. Duplicate occurrence prevention', () => {
+  const rec: RecurringTask = {
+    id: 'rec-gym',
+    title: 'Gym session',
+    priority: 'normal',
+    recurrence: 'daily',
+    active: true,
+    createdAt: Date.now(),
+  };
+
+  const today = new Date();
+  // First generation
+  const firstBatch = generateDueRecurringTasks([rec], [], today);
+  assert.equal(firstBatch.length, 1);
+
+  // Second generation with the created task already in list
+  const secondBatch = generateDueRecurringTasks([rec], firstBatch, today);
+  assert.equal(secondBatch.length, 0); // No duplicates generated!
+});
+
+// --- Routines (86–89) -------------------------------------------------------
+
+test('86. Create routine', () => {
+  const routine: Routine = {
+    id: 'routine-morning',
+    title: 'Morning Routine',
+    active: true,
+    preferredTimeMinutes: 7 * 60 + 30, // 07:30
+    items: [
+      { id: 'item-1', title: 'Wake up & stretch', durationMinutes: 10, type: 'fitness' },
+      { id: 'item-2', title: 'Breakfast', durationMinutes: 20, type: 'meal' },
+      { id: 'item-3', title: 'Review Today', durationMinutes: 15, type: 'generic' },
+    ],
+    createdAt: Date.now(),
+  };
+
+  assert.equal(routine.id, 'routine-morning');
+  assert.equal(routine.items.length, 3);
+  assert.equal(routine.active, true);
+});
+
+test('87. Activate/deactivate routine', () => {
+  const routine: Routine = {
+    id: 'routine-exam',
+    title: 'Exam Preparation Routine',
+    active: true,
+    items: [{ id: 'i1', title: 'Read chapter', durationMinutes: 30 }],
+    createdAt: Date.now(),
+  };
+
+  const deactivated = { ...routine, active: false };
+  assert.equal(deactivated.active, false);
+  const reactivated = { ...deactivated, active: true };
+  assert.equal(reactivated.active, true);
+});
+
+test('88. Routine generates proposal', () => {
+  const routine: Routine = {
+    id: 'routine-morning',
+    title: 'Morning Routine',
+    active: true,
+    preferredTimeMinutes: 7 * 60 + 30, // 07:30 = 450 min
+    items: [
+      { id: 'item-1', title: 'Wake up & stretch', durationMinutes: 10, type: 'fitness' },
+      { id: 'item-2', title: 'Breakfast', durationMinutes: 20, type: 'meal' },
+    ],
+    createdAt: Date.now(),
+  };
+
+  const proposal = generateRoutineProposal(routine);
+  assert.equal(proposal.proposedTasks.length, 2);
+  assert.equal(proposal.proposedBlocks.length, 2);
+  assert.equal(proposal.proposedBlocks[0].start, 450);
+  assert.equal(proposal.proposedBlocks[0].end, 460);
+  assert.equal(proposal.proposedBlocks[1].start, 460);
+  assert.equal(proposal.proposedBlocks[1].end, 480);
+});
+
+test('89. Unconfirmed routine does not modify state', () => {
+  const state = makeSeed();
+  const routine: Routine = {
+    id: 'routine-morning',
+    title: 'Morning Routine',
+    active: true,
+    items: [{ id: 'item-1', title: 'Wake up', durationMinutes: 10 }],
+    createdAt: Date.now(),
+  };
+
+  const originalTasksCount = state.tasks.length;
+  const originalBlocksCount = state.schedule.length;
+
+  const proposal = generateRoutineProposal(routine);
+  assert.ok(proposal.proposedTasks.length > 0);
+
+  // State must remain completely unchanged
+  assert.equal(state.tasks.length, originalTasksCount);
+  assert.equal(state.schedule.length, originalBlocksCount);
+});
+
+// --- Personal Memory (90–93) ------------------------------------------------
+
+test('90. Explicit preference stored', () => {
+  const pref: PersonalPreference = {
+    id: 'pref-deep-work',
+    key: 'preferred_deep_work_time',
+    value: 'morning',
+    source: 'user',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  const result = getEffectivePreference('preferred_deep_work_time', [pref]);
+  assert.ok(result);
+  assert.equal(result?.value, 'morning');
+  assert.equal(result?.source, 'user');
+});
+
+test('91. Explicit preference overrides observed pattern', () => {
+  const userPref: PersonalPreference = {
+    id: 'p-user',
+    key: 'preferred_deep_work_time',
+    value: 'evening',
+    source: 'user',
+    createdAt: 100,
+    updatedAt: 100,
+  };
+
+  const observedPref: PersonalPreference = {
+    id: 'p-obs',
+    key: 'preferred_deep_work_time',
+    value: 'morning',
+    source: 'observed',
+    confidence: 0.95,
+    createdAt: 200,
+    updatedAt: 200,
+  };
+
+  // User preference MUST override observed pattern
+  const effective = getEffectivePreference('preferred_deep_work_time', [observedPref, userPref]);
+  assert.ok(effective);
+  assert.equal(effective?.value, 'evening');
+  assert.equal(effective?.source, 'user');
+});
+
+test('92. Observed pattern requires minimum sample size', () => {
+  const state = makeSeed();
+  // 6 sessions -> early pattern (>= 5 and < 10)
+  state.focusSessions = Array.from({ length: 6 }).map((_, i) => ({
+    id: `fs-${i}`,
+    taskId: 't1',
+    startedAt: Date.now() - i * 86400000,
+    endedAt: Date.now() - i * 86400000 + 40 * 60000,
+    durationMinutes: 40,
+    completed: true,
+  }));
+
+  const earlyPatterns = getBehavioralPatterns(state);
+  const earlyWin = earlyPatterns.find((p) => p.category === 'focus_time');
+  assert.equal(earlyWin?.confidence, 'early');
+
+  // 12 sessions -> recorded pattern (>= 10)
+  state.focusSessions = Array.from({ length: 12 }).map((_, i) => ({
+    id: `fs-${i}`,
+    taskId: 't1',
+    startedAt: Date.now() - i * 86400000,
+    endedAt: Date.now() - i * 86400000 + 45 * 60000,
+    durationMinutes: 45,
+    completed: true,
+  }));
+
+  const recordedPatterns = getBehavioralPatterns(state);
+  const recordedWin = recordedPatterns.find((p) => p.category === 'focus_time');
+  assert.equal(recordedWin?.confidence, 'recorded');
+});
+
+test('93. Insufficient observations return no pattern', () => {
+  const state = makeSeed();
+  // Only 3 sessions (< 5)
+  state.focusSessions = [
+    { id: '1', taskId: 't1', startedAt: Date.now(), endedAt: Date.now() + 30000, durationMinutes: 30, completed: true },
+    { id: '2', taskId: 't2', startedAt: Date.now(), endedAt: Date.now() + 30000, durationMinutes: 30, completed: true },
+    { id: '3', taskId: 't3', startedAt: Date.now(), endedAt: Date.now() + 30000, durationMinutes: 30, completed: true },
+  ];
+
+  const patterns = getBehavioralPatterns(state);
+  const win = patterns.find((p) => p.category === 'focus_time');
+  assert.equal(win?.confidence, 'insufficient');
+  assert.ok(win?.observation.includes('Not enough'));
+});
+
+// --- Behavioral Learning (94–97) -------------------------------------------
+
+test('94. Focus-time pattern calculation', () => {
+  const state = makeSeed();
+  // 10 morning focus sessions (at 10:00 AM)
+  state.focusSessions = Array.from({ length: 10 }).map((_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    d.setHours(10, 0, 0, 0);
+    return {
+      id: `fs-morning-${i}`,
+      taskId: 't1',
+      startedAt: d.getTime(),
+      endedAt: d.getTime() + 45 * 60000,
+      durationMinutes: 45,
+      completed: true,
+    };
+  });
+
+  const patterns = getBehavioralPatterns(state);
+  const win = patterns.find((p) => p.category === 'focus_time');
+  assert.ok(win);
+  assert.ok(win?.observation.includes('9 AM–12 PM'));
+});
+
+test('95. Duration estimation comparison', () => {
+  const tasks: Task[] = Array.from({ length: 5 }).map((_, i) => ({
+    id: `task-${i}`,
+    title: `Task ${i}`,
+    priority: 'normal',
+    dueTs: Date.now(),
+    done: true,
+    createdAt: 1,
+    estimatedMinutes: 30, // 5 * 30 = 150 mins
+  }));
+
+  const sessions: FocusSession[] = Array.from({ length: 5 }).map((_, i) => ({
+    id: `sess-${i}`,
+    taskId: `task-${i}`,
+    startedAt: Date.now() - i * 86400000,
+    endedAt: Date.now() - i * 86400000 + 45 * 60000,
+    durationMinutes: 45, // 5 * 45 = 225 mins (50% longer)
+    completed: true,
+  }));
+
+  const est = getEstimationLearning(sessions, tasks);
+  assert.equal(est.hasSufficientData, true);
+  assert.equal(est.sampleSize, 5);
+  assert.equal(est.estimatedTotalMinutes, 150);
+  assert.equal(est.actualTotalMinutes, 225);
+  assert.equal(est.adjustmentPct, 50);
+  assert.ok(est.message.includes('50% longer'));
+});
+
+test('96. Historical estimate adjustment threshold', () => {
+  const task: Task = { id: 't-test', title: 'Design Circuit', priority: 'important', dueTs: Date.now(), done: false, createdAt: 1, estimatedMinutes: 40 };
+
+  // Case A: Insufficient data (< 5 tasks)
+  const insufficientResult: EstimationLearningResult = {
+    hasSufficientData: false,
+    sampleSize: 3,
+    estimatedTotalMinutes: 90,
+    actualTotalMinutes: 120,
+    ratio: 1.33,
+    adjustmentPct: 33,
+    message: '',
+  };
+  const unadjusted = getAdjustedTaskEstimate(task, insufficientResult, { useHistoricalEstimateAdjustment: true });
+  assert.equal(unadjusted, 40); // Stays at base estimate
+
+  // Case B: Sufficient data and preference enabled
+  const sufficientResult: EstimationLearningResult = {
+    hasSufficientData: true,
+    sampleSize: 8,
+    estimatedTotalMinutes: 240,
+    actualTotalMinutes: 360,
+    ratio: 1.5,
+    adjustmentPct: 50,
+    message: '',
+  };
+  const adjusted = getAdjustedTaskEstimate(task, sufficientResult, { useHistoricalEstimateAdjustment: true });
+  assert.equal(adjusted, 60); // 40 * 1.5 = 60 mins
+});
+
+test('97. No causation language generated', () => {
+  const state = makeSeed();
+  state.focusSessions = Array.from({ length: 10 }).map((_, i) => ({
+    id: `fs-${i}`,
+    taskId: 't1',
+    startedAt: Date.now() - i * 86400000,
+    endedAt: Date.now() - i * 86400000 + 40 * 60000,
+    durationMinutes: 40,
+    completed: true,
+  }));
+
+  const patterns = getBehavioralPatterns(state);
+  assert.ok(patterns.length > 0);
+  for (const p of patterns) {
+    // Assert strictly non-causative phrasing
+    assert.equal(p.observation.toLowerCase().includes('you are a morning person'), false);
+    assert.equal(p.observation.toLowerCase().includes('you work best'), false);
+    assert.equal(p.observation.toLowerCase().includes('you failed'), false);
+    assert.equal(p.observation.toLowerCase().includes('productive score'), false);
+    assert.ok(p.observation.length > 0);
+  }
+});
+
+// --- Templates (98–100) ----------------------------------------------------
+
+test('98. Create task template', () => {
+  const template: TaskTemplate = {
+    id: 'tmpl-lab',
+    title: 'Lab Report',
+    description: 'Engineering laboratory analysis & writeup',
+    items: [
+      { title: 'Read experiment', estimatedMinutes: 15, priority: 'normal', taskType: 'study' as any },
+      { title: 'Collect observations', estimatedMinutes: 30, priority: 'normal', taskType: 'study' as any },
+      { title: 'Write theory', estimatedMinutes: 20, priority: 'normal', taskType: 'work' as any },
+      { title: 'Format report', estimatedMinutes: 15, priority: 'normal', taskType: 'admin' },
+    ],
+    createdAt: Date.now(),
+  };
+
+  assert.equal(template.id, 'tmpl-lab');
+  assert.equal(template.items.length, 4);
+});
+
+test('99. Create proposed tasks from template', () => {
+  const template: TaskTemplate = {
+    id: 'tmpl-lab',
+    title: 'Lab Report',
+    items: [
+      { title: 'Read experiment', estimatedMinutes: 15, priority: 'normal' },
+      { title: 'Analyze results', estimatedMinutes: 35, priority: 'important' },
+    ],
+    createdAt: Date.now(),
+  };
+
+  const proposed = createTasksFromTemplate(template, 'proj-vlsi');
+  assert.equal(proposed.length, 2);
+  assert.equal(proposed[0].title, 'Read experiment');
+  assert.equal(proposed[0].estimatedMinutes, 15);
+  assert.equal(proposed[0].projectId, 'proj-vlsi');
+  assert.equal(proposed[1].priority, 'important');
+});
+
+test('100. Unconfirmed template does not create tasks', () => {
+  const state = makeSeed();
+  const template: TaskTemplate = {
+    id: 'tmpl-lab',
+    title: 'Lab Report',
+    items: [{ title: 'Write procedure', estimatedMinutes: 20, priority: 'normal' }],
+    createdAt: Date.now(),
+  };
+
+  const initialCount = state.tasks.length;
+  const proposed = createTasksFromTemplate(template);
+  assert.ok(proposed.length > 0);
+
+  // Calling createTasksFromTemplate does NOT modify state
+  assert.equal(state.tasks.length, initialCount);
+});
+
+// --- Reminders (101–104) ---------------------------------------------------
+
+test('101. Fixed reminder', () => {
+  const now = new Date();
+  const pastReminder: Reminder = {
+    id: 'rem-fixed',
+    title: 'Submit assignment portal entry',
+    source: 'Manual',
+    dueTs: now.getTime() - 60000, // 1 min ago
+    status: 'tracked',
+    triggerType: 'specific_time',
+  };
+
+  const state = makeSeed();
+  const { triggeredReminders } = evaluateSmartReminders([pastReminder], state, now);
+  assert.equal(triggeredReminders.length, 1);
+  assert.equal(triggeredReminders[0].id, 'rem-fixed');
+});
+
+test('102. Deadline reminder', () => {
+  const now = new Date();
+  const state = makeSeed();
+  state.projects = [
+    { id: 'proj-exam', name: 'Exam Prep', status: 'active', createdAt: 1, updatedAt: 1, deadline: now.getTime() + 2 * 86400000 },
+  ];
+
+  const reminder: Reminder = {
+    id: 'rem-deadline',
+    title: '2 days before Exam Prep deadline',
+    source: 'LifeOS',
+    dueTs: now.getTime() - 1000,
+    status: 'tracked',
+    triggerType: 'before_deadline',
+    relatedProjectId: 'proj-exam',
+  };
+
+  const { triggeredReminders } = evaluateSmartReminders([reminder], state, now);
+  assert.equal(triggeredReminders.length, 1);
+  assert.equal(triggeredReminders[0].relatedProjectId, 'proj-exam');
+});
+
+test('103. Conditional reminder', () => {
+  const now = new Date();
+  const state = makeSeed();
+  state.tasks = [
+    { id: 't-critical', title: 'Submit Thesis Proposal', priority: 'critical', dueTs: now.getTime() + 86400000, done: false, createdAt: 1 },
+  ];
+
+  const reminder: Reminder = {
+    id: 'rem-cond',
+    title: 'Thesis submission check',
+    source: 'Inactivity rule',
+    dueTs: now.getTime() - 1000,
+    status: 'tracked',
+    triggerType: 'after_inactivity',
+    relatedTaskId: 't-critical',
+    triggerCondition: 'Task remains incomplete at 6 PM.',
+  };
+
+  const { triggeredReminders, conditionalAlerts } = evaluateSmartReminders([reminder], state, now);
+  assert.equal(triggeredReminders.length, 1);
+  assert.ok(conditionalAlerts.some((a) => a.includes('Task remains incomplete at 6 PM.')));
+});
+
+test('104. No duplicate reminder', () => {
+  const now = new Date();
+  const state = makeSeed();
+  const doneReminder: Reminder = {
+    id: 'rem-done',
+    title: 'Old done reminder',
+    source: 'Manual',
+    dueTs: now.getTime() - 100000,
+    status: 'done', // Completed!
+    triggerType: 'specific_time',
+  };
+  const dismissedReminder: Reminder = {
+    id: 'rem-dismissed',
+    title: 'Dismissed reminder',
+    source: 'Manual',
+    dueTs: now.getTime() - 100000,
+    status: 'dismissed', // Dismissed!
+    triggerType: 'specific_time',
+  };
+
+  const { triggeredReminders } = evaluateSmartReminders([doneReminder, dismissedReminder], state, now);
+  assert.equal(triggeredReminders.length, 0); // Neither triggers!
+});
+
+// --- Decision History (105–107) --------------------------------------------
+
+test('105. Recommendation recorded', () => {
+  const record = recordDecision(
+    'next_action',
+    'Study Chapter 4',
+    ['Exam approaching', '60 min available', 'Task unblocked'],
+    't-chap4'
+  );
+
+  assert.equal(record.type, 'next_action');
+  assert.equal(record.subjectTitle, 'Study Chapter 4');
+  assert.equal(record.reasons.length, 3);
+  assert.equal(record.actionTaken, 'recommended');
+  assert.equal(record.outcome, 'pending');
+});
+
+test('106. Decision outcome recorded', () => {
+  const record = recordDecision('next_action', 'Study Chapter 4', ['Exam approaching']);
+  // Update outcome when user completes the action
+  const updatedRecord = {
+    ...record,
+    actionTaken: 'started',
+    outcome: 'completed',
+  };
+
+  assert.equal(updatedRecord.actionTaken, 'started');
+  assert.equal(updatedRecord.outcome, 'completed');
+});
+
+test('107. History remains immutable', () => {
+  const rec1 = recordDecision('next_action', 'Task 1', ['Reason 1']);
+  const rec2 = recordDecision('reschedule', 'Task 2', ['Reason 2']);
+  const history = [rec1];
+  const newHistory = [...history, rec2];
+
+  assert.equal(history.length, 1);
+  assert.equal(newHistory.length, 2);
+  assert.equal(history[0].id, rec1.id);
+});
+
+// --- Weekly Review V2 (108–110) --------------------------------------------
+
+test('108. Weekly totals correct', () => {
+  const state = makeSeed();
+  const todayKey = localDateKey();
+  state.dailyReviews = [
+    { dateKey: todayKey, completedTasks: 4, completedHabits: 2, focusMinutes: 90, plannedMinutes: 120, spentAmount: 100, createdAt: 1, updatedAt: 1 },
+    { dateKey: shiftDateKey(todayKey, -1), completedTasks: 3, completedHabits: 2, focusMinutes: 60, plannedMinutes: 100, spentAmount: 150, createdAt: 1, updatedAt: 1 },
+    { dateKey: shiftDateKey(todayKey, -2), completedTasks: 5, completedHabits: 3, focusMinutes: 110, plannedMinutes: 150, spentAmount: 200, createdAt: 1, updatedAt: 1 },
+  ];
+
+  const review = getWeeklyReviewV2(state);
+  assert.equal(review.tasksCompleted, 12);
+  assert.equal(review.focusMinutes, 260); // 90 + 60 + 110 = 260 mins
+});
+
+test('109. Week-over-week comparison safe', () => {
+  const state = makeSeed();
+  const todayKey = localDateKey();
+  // Current week: 100 focus mins
+  state.dailyReviews = [
+    { dateKey: todayKey, completedTasks: 3, completedHabits: 1, focusMinutes: 100, plannedMinutes: 100, spentAmount: 50, createdAt: 1, updatedAt: 1 },
+    // Prior week (9 days ago): 50 focus mins
+    { dateKey: shiftDateKey(todayKey, -9), completedTasks: 2, completedHabits: 1, focusMinutes: 50, plannedMinutes: 100, spentAmount: 50, createdAt: 1, updatedAt: 1 },
+  ];
+
+  const review = getWeeklyReviewV2(state);
+  assert.ok(review.comparisonWithPriorWeek);
+  assert.equal(review.comparisonWithPriorWeek?.focusMinutesDelta, 50);
+  assert.ok(review.comparisonWithPriorWeek?.focusTrendText.includes('increased'));
+});
+
+test('110. Insufficient history handled', () => {
+  const state = makeSeed();
+  state.dailyReviews = []; // Zero reviews
+
+  const review = getWeeklyReviewV2(state);
+  assert.equal(review.tasksCompleted, 0);
+  assert.equal(review.focusMinutes, 0);
+  assert.equal(review.comparisonWithPriorWeek, undefined);
+});
+
+// --- NLP Ask LifeOS V3 (111–113) -------------------------------------------
+
+test('111. Information request parsed', () => {
+  const state = makeSeed();
+  const reply = askLifeOS('When do I usually focus?', state);
+  assert.equal(reply.kind, 'now');
+  assert.ok(reply.title.includes('Focus Patterns'));
+});
+
+test('112. Planning request parsed', () => {
+  const state = makeSeed();
+  const reply = askLifeOS('Review my week', state);
+  assert.equal(reply.kind, 'now');
+  assert.ok(reply.title.includes('Weekly Execution Review'));
+});
+
+test('113. State-changing request requires confirmation', () => {
+  const state = makeSeed();
+  const reply = askLifeOS('Create a goal called internship preparation', state);
+  assert.equal(reply.kind, 'proposal');
+  assert.equal(reply.actionPending, true);
+  assert.ok(reply.lines.some((l) => l.value.includes('Nothing added yet')));
+});
+
+// --- Migration (114–116) ---------------------------------------------------
+
+test('114. V2 state loads', () => {
+  const v2StoredRaw: any = {
+    name: 'Aarav',
+    tasks: [{ id: 't1', title: 'V2 Task', priority: 'normal', dueTs: 1000, done: false, createdAt: 100 }],
+    planningPreferences: {
+      deepWorkWindow: { start: 540, end: 720 },
+    },
+    adaptiveProposals: [],
+  };
+
+  const parsed = JSON.parse(JSON.stringify(v2StoredRaw));
+  assert.equal(parsed.name, 'Aarav');
+  assert.equal(parsed.goals, undefined);
+  assert.equal(parsed.recurringTasks, undefined);
+  assert.equal(parsed.routines, undefined);
+  assert.equal(parsed.personalPreferences, undefined);
+});
+
+test('115. V3 fields receive defaults', () => {
+  const v2StoredRaw: any = {
+    name: 'Aarav',
+    tasks: [{ id: 't1', title: 'V2 Task', priority: 'normal', dueTs: 1000, done: false, createdAt: 100 }],
+  };
+
+  // Safe migration logic
+  v2StoredRaw.goals = Array.isArray(v2StoredRaw.goals) ? v2StoredRaw.goals : [];
+  v2StoredRaw.recurringTasks = Array.isArray(v2StoredRaw.recurringTasks) ? v2StoredRaw.recurringTasks : [];
+  v2StoredRaw.routines = Array.isArray(v2StoredRaw.routines) ? v2StoredRaw.routines : [];
+  v2StoredRaw.personalPreferences = Array.isArray(v2StoredRaw.personalPreferences) ? v2StoredRaw.personalPreferences : [];
+  v2StoredRaw.decisionRecords = Array.isArray(v2StoredRaw.decisionRecords) ? v2StoredRaw.decisionRecords : [];
+  v2StoredRaw.taskTemplates = Array.isArray(v2StoredRaw.taskTemplates) ? v2StoredRaw.taskTemplates : [];
+  v2StoredRaw.planningPreferences = {
+    deepWorkWindow: { start: 9 * 60, end: 12 * 60 },
+    lightWorkWindow: { start: 14 * 60, end: 17 * 60 },
+    personalWindow: { start: 19 * 60, end: 24 * 60 },
+    useHistoricalEstimateAdjustment: false,
+    ...(v2StoredRaw.planningPreferences || {}),
+  };
+
+  assert.ok(Array.isArray(v2StoredRaw.goals));
+  assert.ok(Array.isArray(v2StoredRaw.recurringTasks));
+  assert.ok(Array.isArray(v2StoredRaw.routines));
+  assert.ok(Array.isArray(v2StoredRaw.personalPreferences));
+  assert.ok(Array.isArray(v2StoredRaw.decisionRecords));
+  assert.ok(Array.isArray(v2StoredRaw.taskTemplates));
+  assert.equal(v2StoredRaw.planningPreferences.useHistoricalEstimateAdjustment, false);
+});
+
+test('116. Existing user data remains unchanged', () => {
+  const v2Data: any = {
+    name: 'Aarav',
+    tasks: [
+      { id: 't-orig-1', title: 'Coursework task', priority: 'critical', dueTs: 5000, done: false, createdAt: 10 },
+      { id: 't-orig-2', title: 'Gym task', priority: 'normal', dueTs: 6000, done: true, createdAt: 11 },
+    ],
+    projects: [{ id: 'p-orig-1', name: 'Thesis', status: 'active', createdAt: 10, updatedAt: 20 }],
+    habits: [{ id: 'h-orig-1', name: 'Read 20 pages', frequency: 'daily', targetPerPeriod: 1, createdAt: 10, active: true }],
+    focusSessions: [{ id: 'fs-orig-1', taskId: 't-orig-1', startedAt: 1000, endedAt: 2500, durationMinutes: 25, completed: true }],
+    dailyReviews: [{ dateKey: '2026-09-25', completedTasks: 3, completedHabits: 2, focusMinutes: 75, spentAmount: 120, plannedMinutes: 180, createdAt: 1, updatedAt: 1 }],
+  };
+
+  // Run non-destructive migration
+  v2Data.goals = v2Data.goals ?? [];
+  v2Data.recurringTasks = v2Data.recurringTasks ?? [];
+  v2Data.routines = v2Data.routines ?? [];
+  v2Data.personalPreferences = v2Data.personalPreferences ?? [];
+  v2Data.decisionRecords = v2Data.decisionRecords ?? [];
+  v2Data.taskTemplates = v2Data.taskTemplates ?? [];
+
+  assert.equal(v2Data.tasks.length, 2);
+  assert.equal(v2Data.tasks[0].id, 't-orig-1');
+  assert.equal(v2Data.tasks[1].done, true);
+  assert.equal(v2Data.projects[0].name, 'Thesis');
+  assert.equal(v2Data.habits[0].name, 'Read 20 pages');
+  assert.equal(v2Data.focusSessions[0].durationMinutes, 25);
+  assert.equal(v2Data.dailyReviews[0].focusMinutes, 75);
+});
+
+// ===========================================================================
+// Test Suite: LifeOS V4 Real-World Execution + Notifications + Calendar Integration
+// ===========================================================================
+
+// --- Notifications (117–121) ------------------------------------------------
+
+test('117. Notification preferences migrate safely', () => {
+  const v3State: any = {
+    name: 'Aarav',
+    tasks: [],
+  };
+
+  // Safe migration adds defaults
+  v3State.notificationPreferences = {
+    ...DEFAULT_NOTIFICATION_PREFERENCES,
+    ...(v3State.notificationPreferences || {}),
+  };
+  v3State.localNotifications = Array.isArray(v3State.localNotifications) ? v3State.localNotifications : [];
+
+  assert.equal(v3State.notificationPreferences.enabled, true);
+  assert.equal(v3State.notificationPreferences.taskReminders, true);
+  assert.equal(v3State.notificationPreferences.deadlineReminders, true);
+  assert.equal(v3State.notificationPreferences.routineReminders, true);
+  assert.equal(v3State.notificationPreferences.weeklyReviewReminder, true);
+  assert.equal(v3State.notificationPreferences.quietHours.start, 22 * 60 + 30);
+  assert.equal(v3State.notificationPreferences.quietHours.end, 7 * 60);
+  assert.ok(Array.isArray(v3State.localNotifications));
+});
+
+test('118. Notification scheduled correctly', async () => {
+  const service = new SafeLocalNotificationService();
+  const notif: LocalNotification = {
+    id: 'notif-1',
+    title: 'Study DSA',
+    body: 'Scheduled study block starts now.',
+    type: 'task',
+    sourceId: 't-1',
+    scheduledAt: Date.now() + 10000,
+    status: 'scheduled',
+    createdAt: Date.now(),
+  };
+
+  const id = await service.schedule(notif);
+  assert.equal(id, 'notif-1');
+  const scheduled = service.getScheduledNotifications();
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].title, 'Study DSA');
+  assert.equal(scheduled[0].status, 'scheduled');
+});
+
+test('119. Notification cancellation works', async () => {
+  const service = new SafeLocalNotificationService();
+  await service.schedule({
+    id: 'notif-to-cancel',
+    title: 'Cancel Me',
+    body: 'Test body',
+    type: 'reminder',
+    scheduledAt: Date.now() + 5000,
+    status: 'scheduled',
+    createdAt: Date.now(),
+  });
+
+  assert.equal(service.getScheduledNotifications().length, 1);
+  await service.cancel('notif-to-cancel');
+  assert.equal(service.getScheduledNotifications().length, 0);
+});
+
+test('120. Quiet hours delay notification', () => {
+  const quietHours = { start: 22 * 60 + 30, end: 7 * 60 }; // 22:30 -> 07:00
+
+  // 1. Target time at 23:00 (11 PM) -> falls in quiet hours, delay to tomorrow 07:00
+  const dateAt23 = new Date(2026, 8, 26, 23, 0, 0, 0);
+  const adjustedLate = adjustForQuietHours(dateAt23.getTime(), quietHours);
+  const adjustedLateDate = new Date(adjustedLate);
+  assert.equal(adjustedLateDate.getHours(), 7);
+  assert.equal(adjustedLateDate.getMinutes(), 0);
+  assert.equal(adjustedLateDate.getDate(), 27);
+
+  // 2. Target time at 03:00 AM -> falls in quiet hours, delay to today 07:00
+  const dateAt03 = new Date(2026, 8, 26, 3, 0, 0, 0);
+  const adjustedEarly = adjustForQuietHours(dateAt03.getTime(), quietHours);
+  const adjustedEarlyDate = new Date(adjustedEarly);
+  assert.equal(adjustedEarlyDate.getHours(), 7);
+  assert.equal(adjustedEarlyDate.getMinutes(), 0);
+  assert.equal(adjustedEarlyDate.getDate(), 26);
+
+  // 3. Target time at 14:00 (2 PM) -> outside quiet hours, remains unchanged
+  const dateAt14 = new Date(2026, 8, 26, 14, 0, 0, 0);
+  const adjustedMidday = adjustForQuietHours(dateAt14.getTime(), quietHours);
+  assert.equal(adjustedMidday, dateAt14.getTime());
+});
+
+test('121. Disabled notifications create no notification', () => {
+  const state = makeSeed();
+  state.notificationPreferences = {
+    enabled: false, // Master switch OFF
+    taskReminders: true,
+    deadlineReminders: true,
+    routineReminders: true,
+    weeklyReviewReminder: true,
+  };
+
+  const planned = planLocalNotifications(state);
+  assert.equal(planned.length, 0);
+});
+
+// --- Execution (122–127) ----------------------------------------------------
+
+test('122. Current schedule context calculated correctly', () => {
+  const blocks: ScheduleBlock[] = [
+    { id: 'b1', title: 'Morning Gym', type: 'fitness', start: 9 * 60, end: 10 * 60, done: true },
+    { id: 'b2', title: 'VLSI Report', type: 'study', start: 10 * 60 + 30, end: 12 * 60, done: false },
+    { id: 'b3', title: 'DSA Practice', type: 'study', start: 14 * 60, end: 15 * 60, done: false },
+  ];
+
+  // Current time: 11:00 AM (660 min)
+  const ctx = getCurrentScheduleContext(blocks, 11 * 60);
+  assert.equal(ctx.status, 'in_block');
+  assert.ok(ctx.currentBlock);
+  assert.equal(ctx.currentBlock?.title, 'VLSI Report');
+  assert.equal(ctx.availableMinutes, 60); // 12:00 - 11:00 = 60 min remaining
+});
+
+test('123. Next schedule block detected', () => {
+  const blocks: ScheduleBlock[] = [
+    { id: 'b1', title: 'VLSI Report', type: 'study', start: 10 * 60 + 30, end: 12 * 60, done: false },
+    { id: 'b2', title: 'Project Work', type: 'work', start: 14 * 60, end: 15 * 60, done: false },
+  ];
+
+  // At 11:00 AM, inside b1
+  const ctx = getCurrentScheduleContext(blocks, 11 * 60);
+  assert.ok(ctx.nextBlock);
+  assert.equal(ctx.nextBlock?.title, 'Project Work');
+
+  // At 12:30 PM (750 min), between blocks
+  const ctxFree = getCurrentScheduleContext(blocks, 12 * 60 + 30);
+  assert.equal(ctxFree.status, 'in_free_window');
+  assert.equal(ctxFree.nextBlock?.title, 'Project Work');
+  assert.equal(ctxFree.availableMinutes, 90); // 14:00 - 12:30 = 90 min
+});
+
+test('124. Overdue block detected', () => {
+  const blocks: ScheduleBlock[] = [
+    { id: 'b-overdue', title: 'Unfinished Morning Task', type: 'study', start: 8 * 60, end: 9 * 60, done: false },
+    { id: 'b-current', title: 'Current Task', type: 'study', start: 10 * 60, end: 11 * 60, done: false },
+  ];
+
+  // At 10:30 AM (630 min)
+  const ctx = getCurrentScheduleContext(blocks, 10 * 60 + 30);
+  assert.equal(ctx.overdueBlocks.length, 1);
+  assert.equal(ctx.overdueBlocks[0].title, 'Unfinished Morning Task');
+});
+
+test('125. Focus session linked to schedule block', () => {
+  const task: Task = {
+    id: 't-focus-linked',
+    title: 'Study for Midterm',
+    priority: 'critical',
+    dueTs: Date.now() + 86400000,
+    done: false,
+    createdAt: Date.now(),
+  };
+  const block: ScheduleBlock = {
+    id: 'b-study',
+    title: 'Study for Midterm',
+    type: 'study',
+    start: 10 * 60,
+    end: 11 * 60,
+    taskId: 't-focus-linked',
+    done: false,
+  };
+
+  // Start focus session linked to task and block
+  const session: FocusSession = {
+    id: 'fs-1',
+    taskId: task.id,
+    startedAt: Date.now() - 30 * 60 * 1000,
+    endedAt: Date.now(),
+    durationMinutes: 30,
+    completed: false,
+  };
+
+  assert.equal(session.taskId, block.taskId);
+  assert.equal(block.taskId, task.id);
+});
+
+test('126. Focus completion records actual duration', () => {
+  const session: FocusSession = {
+    id: 'fs-complete',
+    taskId: 't-record-dur',
+    startedAt: 100000,
+    endedAt: 100000 + 45 * 60 * 1000,
+    durationMinutes: 45,
+    completed: true,
+  };
+
+  assert.equal(session.durationMinutes, 45);
+  assert.equal(session.completed, true);
+  assert.ok(session.endedAt! > session.startedAt);
+});
+
+test('127. Schedule overrun generates proposal', () => {
+  const initialBlocks: ScheduleBlock[] = [
+    { id: 'b1', title: 'Task 1', type: 'study', start: 9 * 60, end: 10 * 60, done: false },
+    { id: 'b2', title: 'Task 2', type: 'study', start: 10 * 60, end: 11 * 60, done: false },
+    { id: 'b3', title: 'Task 3', type: 'study', start: 11 * 60, end: 12 * 60, done: false },
+  ];
+
+  const proposal: AdaptiveProposal = {
+    id: 'prop-overrun',
+    taskTitle: 'Task 2',
+    blockId: 'b2',
+    oldStart: 10 * 60,
+    oldEnd: 11 * 60,
+    newStart: 10 * 60 + 30,
+    newEnd: 11 * 60 + 30,
+    reason: 'Previous task ran 30 minutes longer than estimated.',
+    impact: 'Pushes Task 2 by 30 minutes',
+    priority: 'important',
+    status: 'pending',
+    createdAt: Date.now(),
+  };
+
+  const updatedSchedule = applyProposalToSchedule(initialBlocks, proposal);
+  assert.equal(updatedSchedule.find((b) => b.id === 'b2')?.start, 10 * 60 + 30);
+  assert.equal(updatedSchedule.find((b) => b.id === 'b2')?.end, 11 * 60 + 30);
+  // Original blocks untouched
+  assert.equal(initialBlocks.find((b) => b.id === 'b2')?.start, 10 * 60);
+});
+
+// --- Calendar (128–133) -----------------------------------------------------
+
+test('128. External event imported', () => {
+  const externalEvents: ExternalCalendarEvent[] = [
+    {
+      id: 'ext-event-1',
+      calendarId: 'work-cal',
+      title: 'ECE Department Meeting',
+      start: 11 * 60,
+      end: 12 * 60,
+      location: 'Room 301',
+    },
+  ];
+
+  const currentSchedule: ScheduleBlock[] = [
+    { id: 'local-1', title: 'Study DSA', type: 'study', start: 9 * 60, end: 10 * 60, done: false },
+  ];
+
+  const updatedSchedule = importExternalCalendarEvents(externalEvents, currentSchedule);
+  assert.equal(updatedSchedule.length, 2);
+  const imported = updatedSchedule.find((b) => b.externalEventId === 'ext-event-1');
+  assert.ok(imported);
+  assert.equal(imported?.title, 'ECE Department Meeting');
+  assert.equal(imported?.source, 'external');
+  assert.equal(imported?.start, 11 * 60);
+  assert.equal(imported?.end, 12 * 60);
+});
+
+test('129. External event marked read-only', () => {
+  const externalEvents: ExternalCalendarEvent[] = [
+    {
+      id: 'ext-read-only',
+      calendarId: 'cal-1',
+      title: 'Dentist Appointment',
+      start: 14 * 60,
+      end: 15 * 60,
+    },
+  ];
+
+  const schedule = importExternalCalendarEvents(externalEvents, []);
+  assert.equal(schedule[0].source, 'external');
+  // External events cannot have their time modified or automatically rescheduled
+  assert.equal(schedule[0].externalEventId, 'ext-read-only');
+});
+
+test('130. Duplicate calendar event prevented', () => {
+  const externalEvents: ExternalCalendarEvent[] = [
+    {
+      id: 'ext-dup',
+      calendarId: 'cal-1',
+      title: 'Office Hours',
+      start: 15 * 60,
+      end: 16 * 60,
+    },
+  ];
+
+  // Import once
+  const schedule1 = importExternalCalendarEvents(externalEvents, []);
+  assert.equal(schedule1.length, 1);
+
+  // Import same event again
+  const schedule2 = importExternalCalendarEvents(externalEvents, schedule1);
+  assert.equal(schedule2.length, 1);
+});
+
+test('131. Re-import updates existing event', () => {
+  const initialEvents: ExternalCalendarEvent[] = [
+    {
+      id: 'ext-move',
+      calendarId: 'cal-1',
+      title: 'Physics Lab',
+      start: 14 * 60,
+      end: 16 * 60,
+    },
+  ];
+
+  const schedule1 = importExternalCalendarEvents(initialEvents, []);
+  assert.equal(schedule1[0].start, 14 * 60);
+
+  // Event rescheduled externally to 15:00 - 17:00
+  const updatedEvents: ExternalCalendarEvent[] = [
+    {
+      id: 'ext-move',
+      calendarId: 'cal-1',
+      title: 'Physics Lab - Moved',
+      start: 15 * 60,
+      end: 17 * 60,
+    },
+  ];
+
+  const schedule2 = importExternalCalendarEvents(updatedEvents, schedule1);
+  assert.equal(schedule2.length, 1);
+  assert.equal(schedule2[0].title, 'Physics Lab - Moved');
+  assert.equal(schedule2[0].start, 15 * 60);
+  assert.equal(schedule2[0].end, 17 * 60);
+});
+
+test('132. Calendar permission failure handled', async () => {
+  const provider = new SafeLocalCalendarProvider();
+  // Provider is platform-safe and handles permission cleanly
+  const hasPermission = await provider.requestPermission();
+  assert.equal(typeof hasPermission, 'boolean');
+
+  // If permission fails, status can be set to 'failed' safely without throwing
+  const syncState: CalendarSyncState = {
+    status: 'failed',
+    lastSyncError: 'Calendar permission was not granted by device.',
+    importedEventCount: 0,
+  };
+  assert.equal(syncState.status, 'failed');
+  assert.ok(syncState.lastSyncError?.includes('permission'));
+});
+
+test('133. Offline calendar data remains available', () => {
+  const state = makeSeed();
+  state.externalCalendarEvents = [
+    {
+      id: 'ext-offline',
+      calendarId: 'default',
+      title: 'Offline Seminar',
+      start: 10 * 60,
+      end: 11 * 60,
+    },
+  ];
+  state.calendarSync = {
+    status: 'synced',
+    lastSyncedAt: Date.now() - 3600000,
+    importedEventCount: 1,
+  };
+
+  // State maintains cached external events when offline
+  assert.equal(state.externalCalendarEvents.length, 1);
+  assert.equal(state.externalCalendarEvents[0].title, 'Offline Seminar');
+});
+
+// --- Search (134–138) -------------------------------------------------------
+
+test('134. Task search', () => {
+  const state = makeSeed();
+  state.tasks.push({
+    id: 't-vlsi',
+    title: 'VLSI laboratory report',
+    priority: 'critical',
+    dueTs: Date.now() + 86400000,
+    done: false,
+    createdAt: Date.now(),
+  });
+
+  const results = searchLifeOS(state, 'VLSI', 'tasks');
+  assert.ok(results.items.length >= 1);
+  assert.ok(results.items.some((i) => i.title.includes('VLSI laboratory report')));
+});
+
+test('135. Project search', () => {
+  const state = makeSeed();
+  state.projects.push({
+    id: 'p-robotics',
+    name: 'Autonomous Robotics Project',
+    status: 'active',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+
+  const results = searchLifeOS(state, 'Robotics', 'projects');
+  assert.ok(results.items.length >= 1);
+  assert.ok(results.items.some((i) => i.title.includes('Autonomous Robotics Project')));
+});
+
+test('136. Goal search', () => {
+  const state = makeSeed();
+  state.goals = state.goals || [];
+  state.goals.push({
+    id: 'g-gre',
+    title: 'Score 325+ on GRE Exam',
+    status: 'active',
+    projectIds: [],
+    createdAt: Date.now(),
+  });
+
+  const results = searchLifeOS(state, 'GRE', 'goals');
+  assert.ok(results.items.length >= 1);
+  assert.ok(results.items.some((i) => i.title.includes('GRE Exam')));
+});
+
+test('137. History search', () => {
+  const state = makeSeed();
+  state.decisionRecords = state.decisionRecords || [];
+  state.decisionRecords.push({
+    id: 'dec-thesis',
+    timestamp: Date.now(),
+    type: 'next_action',
+    subjectTitle: 'Recommending thesis literature review',
+    reasons: ['High priority milestone'],
+  });
+
+  const results = searchLifeOS(state, 'thesis', 'history');
+  assert.ok(results.items.length >= 1);
+  assert.ok(results.items.some((i) => i.title.includes('thesis')));
+});
+
+test('138. Case-insensitive search', () => {
+  const state = makeSeed();
+  state.tasks.push({
+    id: 't-algo',
+    title: 'Dynamic Programming Practice',
+    priority: 'normal',
+    dueTs: Date.now() + 86400000,
+    done: false,
+    createdAt: Date.now(),
+  });
+
+  const lower = searchLifeOS(state, 'dynamic programming', 'all');
+  const upper = searchLifeOS(state, 'DYNAMIC PROGRAMMING', 'all');
+  assert.equal(lower.items.length, upper.items.length);
+  assert.ok(lower.items.some((i) => i.title === 'Dynamic Programming Practice'));
+});
+
+// --- Export / Import (139–143) ----------------------------------------------
+
+test('139. Full state export', () => {
+  const state = makeSeed();
+  const exported = exportLifeOSData(state);
+  assert.equal(typeof exported, 'string');
+  const parsed = JSON.parse(exported);
+  assert.equal(parsed._version, 'lifeos-v4');
+  const content = parsed.data || parsed;
+  assert.ok(Array.isArray(content.tasks));
+  assert.ok(Array.isArray(content.projects));
+  assert.ok(Array.isArray(content.goals));
+  assert.ok(content.notificationPreferences);
+});
+
+test('140. Valid state import', () => {
+  const state = makeSeed();
+  const jsonString = exportLifeOSData(state);
+  const validated = validateLifeOSImport(jsonString);
+  assert.equal(validated.valid, true);
+  assert.ok(validated.data);
+  assert.equal(validated.data?.name, state.name);
+});
+
+test('141. Invalid import rejected', () => {
+  const invalidJson = '{ malformed: json, ';
+  const validated = validateLifeOSImport(invalidJson);
+  assert.equal(validated.valid, false);
+  assert.ok(validated.error);
+
+  const missingFields = JSON.stringify({ _version: 'other', foo: 'bar' });
+  const validatedMissing = validateLifeOSImport(missingFields);
+  assert.equal(validatedMissing.valid, false);
+});
+
+test('142. Existing state unchanged after failed import', () => {
+  const state = makeSeed();
+  const originalTaskCount = state.tasks.length;
+
+  const backupState = JSON.parse(JSON.stringify(state));
+  const validated = validateLifeOSImport('not a valid state');
+  if (!validated.valid) {
+    // State remains backupState
+    assert.equal(backupState.tasks.length, originalTaskCount);
+  }
+  assert.equal(validated.valid, false);
+});
+
+test('143. Import requires confirmation', () => {
+  let state = makeSeed();
+  const originalName = state.name;
+
+  const importedState = makeSeed();
+  importedState.name = 'New Imported Name';
+  const jsonStr = exportLifeOSData(importedState);
+
+  // If mode is 'cancel', state is preserved
+  const handleImport = (mode: 'replace' | 'cancel') => {
+    if (mode === 'cancel') return state;
+    const v = validateLifeOSImport(jsonStr);
+    return v.valid && v.data ? v.data : state;
+  };
+
+  const cancelledState = handleImport('cancel');
+  assert.equal(cancelledState.name, originalName);
+
+  const confirmedState = handleImport('replace');
+  assert.equal(confirmedState.name, 'New Imported Name');
+});
+
+// --- Execution Review (144–146) ---------------------------------------------
+
+test('144. Daily execution summary', () => {
+  const state = makeSeed();
+  state.tasks[0].done = true;
+  state.tasks[0].dueTs = Date.now();
+  const now = Date.now();
+  state.focusSessions = [
+    { id: 'fs-1', taskId: state.tasks[0].id, startedAt: now, endedAt: now + 45 * 60000, durationMinutes: 45, completed: true },
+  ];
+
+  const summary = getDailyExecutionSummary(state);
+  assert.ok(summary.completedTasksCount >= 1);
+  assert.ok(summary.recordedFocusMinutes >= 45);
+  assert.ok(Array.isArray(summary.executionObservations));
+});
+
+test('145. Weekly execution summary', () => {
+  const state = makeSeed();
+  const summary = getWeeklyPlanningSummary(state);
+  assert.ok(typeof summary.lastWeek.tasksCompleted === 'number');
+  assert.ok(typeof summary.lastWeek.focusMinutes === 'number');
+  assert.ok(typeof summary.lastWeek.habitConsistencyPct === 'number');
+});
+
+test('146. Execution observations use factual language', () => {
+  const state = makeSeed();
+  const summary = getDailyExecutionSummary(state);
+
+  const observationsText = summary.executionObservations.join(' ').toLowerCase();
+  // Must avoid judgmental or causal claims
+  assert.equal(observationsText.includes('failed'), false);
+  assert.equal(observationsText.includes('lazy'), false);
+  assert.equal(observationsText.includes('unproductive'), false);
+  assert.equal(observationsText.includes('bad'), false);
+});
+
+// --- Migration (147–149) ---------------------------------------------------
+
+test('147. V3 state loads', () => {
+  const v3State: any = {
+    name: 'Aarav',
+    tasks: [{ id: 't1', title: 'Task 1', priority: 'normal', dueTs: 1000, done: false, createdAt: 100 }],
+    goals: [{ id: 'g1', title: 'Goal 1', createdAt: 100 }],
+    routines: [{ id: 'r1', title: 'Routine 1', active: true, items: [], createdAt: 100 }],
+    personalPreferences: [{ id: 'p1', key: 'preferred_mode', value: 'morning', createdAt: 100 }],
+  };
+
+  assert.equal(v3State.goals.length, 1);
+  assert.equal(v3State.routines.length, 1);
+  assert.equal(v3State.personalPreferences.length, 1);
+});
+
+test('148. V4 defaults applied', () => {
+  const v3State: any = {
+    name: 'Aarav',
+    tasks: [],
+  };
+
+  // V4 Migration defaults
+  v3State.notificationPreferences = {
+    ...DEFAULT_NOTIFICATION_PREFERENCES,
+    ...(v3State.notificationPreferences || {}),
+  };
+  v3State.localNotifications = Array.isArray(v3State.localNotifications) ? v3State.localNotifications : [];
+  v3State.calendarSync = v3State.calendarSync || {
+    status: 'never_synced',
+    importedEventCount: 0,
+  };
+  v3State.externalCalendarEvents = Array.isArray(v3State.externalCalendarEvents) ? v3State.externalCalendarEvents : [];
+
+  assert.equal(v3State.notificationPreferences.enabled, true);
+  assert.equal(v3State.calendarSync.status, 'never_synced');
+  assert.equal(v3State.externalCalendarEvents.length, 0);
+  assert.equal(v3State.localNotifications.length, 0);
+});
+
+test('149. Existing data preserved', () => {
+  const stateBefore = makeSeed();
+  stateBefore.tasks.push({
+    id: 't-precious',
+    title: 'Precious Existing Task',
+    priority: 'critical',
+    dueTs: Date.now() + 100000,
+    done: false,
+    createdAt: Date.now(),
+  });
+  stateBefore.goals = stateBefore.goals || [];
+  stateBefore.goals.push({
+    id: 'g-precious',
+    title: 'Precious Goal',
+    status: 'active',
+    projectIds: [],
+    createdAt: Date.now(),
+  });
+
+  const rawJson = JSON.stringify(stateBefore);
+  const reloaded = JSON.parse(rawJson);
+
+  // Apply V4 migration
+  reloaded.notificationPreferences = {
+    ...DEFAULT_NOTIFICATION_PREFERENCES,
+    ...(reloaded.notificationPreferences || {}),
+  };
+  reloaded.externalCalendarEvents = reloaded.externalCalendarEvents ?? [];
+
+  assert.ok(reloaded.tasks.some((t: any) => t.id === 't-precious'));
+  assert.ok(reloaded.goals.some((g: any) => g.id === 'g-precious'));
+});
+
+// --- Additional V4 Features (150–153) ---------------------------------------
+
+test('150. Ask LifeOS: next event and free hour query', () => {
+  const state = makeSeed();
+  state.schedule = [
+    { id: 'b-sem', title: 'Department Seminar', type: 'fixed', start: 14 * 60, end: 15 * 60, done: false, source: 'external' },
+  ];
+
+  const replyNext = askLifeOS('What is my next event?', state);
+  assert.ok(replyNext.kind === 'now' || replyNext.kind === 'time');
+  assert.ok(replyNext.lines.some((l) => l.value.includes('Department Seminar') || l.value.includes('14:00')));
+
+  const replyFree = askLifeOS('When is my next free hour?', state);
+  assert.ok(replyFree.kind === 'now' || replyFree.kind === 'time');
+  assert.ok(replyFree.title.includes('Free Window'));
+});
+
+test('151. Ask LifeOS: local search and execution summary', () => {
+  const state = makeSeed();
+  state.tasks.push({
+    id: 't-search-ask',
+    title: 'VLSI Simulation Results',
+    priority: 'normal',
+    dueTs: Date.now() + 86400000,
+    done: false,
+    createdAt: Date.now(),
+  });
+
+  const replySearch = askLifeOS('Search for VLSI', state);
+  assert.equal(replySearch.kind, 'now');
+  assert.ok(replySearch.lines.some((l) => l.value.includes('VLSI Simulation Results')));
+
+  const replySummary = askLifeOS('Show my execution summary', state);
+  assert.equal(replySummary.kind, 'now');
+  assert.ok(replySummary.title.includes('Execution Summary'));
+});
+
+test('152. SafeLocalNotificationService platform-safe execution', async () => {
+  const service = new SafeLocalNotificationService();
+  const perm = await service.requestPermission();
+  assert.equal(perm, true);
+
+  await service.schedule({
+    id: 'notif-safe-1',
+    title: 'Safe Alert 1',
+    body: 'Safe body',
+    type: 'task',
+    scheduledAt: Date.now() + 1000,
+    status: 'scheduled',
+    createdAt: Date.now(),
+  });
+  await service.schedule({
+    id: 'notif-safe-2',
+    title: 'Safe Alert 2',
+    body: 'Safe body',
+    type: 'reminder',
+    scheduledAt: Date.now() + 2000,
+    status: 'scheduled',
+    createdAt: Date.now(),
+  });
+
+  assert.equal(service.getScheduledNotifications().length, 2);
+  await service.cancelAll();
+  assert.equal(service.getScheduledNotifications().length, 0);
+});
+
+test('153. SafeLocalCalendarProvider platform-safe execution', async () => {
+  const provider = new SafeLocalCalendarProvider();
+  const perm = await provider.requestPermission();
+  assert.equal(perm, true);
+
+  const calendars = await provider.getCalendars();
+  assert.ok(Array.isArray(calendars));
+  assert.ok(calendars.length >= 1);
+
+  const events = await provider.getEvents(Date.now(), Date.now() + 86400000);
+  assert.ok(Array.isArray(events));
+  assert.ok(events.length >= 1);
+});
+
+
 

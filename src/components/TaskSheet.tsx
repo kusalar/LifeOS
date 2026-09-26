@@ -169,7 +169,12 @@ export function TaskSheet({
               </Text>
               <Text style={{ color: C.faint, fontSize: 12 }}>Set project, priority, duration & due date</Text>
             </View>
-            <Pressable onPress={onClose} hitSlop={10}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close task editor sheet"
+            >
               <Ionicons name="close" size={22} color={C.sub} />
             </Pressable>
           </View>

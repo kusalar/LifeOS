@@ -172,6 +172,8 @@ export function TodayScreen({ navigation }: { navigation: any }) {
             <Pressable
               onPress={openAsk}
               hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Ask LifeOS decision engine"
               style={{
                 width: 42,
                 height: 42,
@@ -287,7 +289,12 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                   <Ionicons name="sunny" size={15} color={C.amber} />
                   <Label style={{ color: C.amber, fontWeight: '800' }}>{greeting(now).toUpperCase()}</Label>
                 </View>
-                <Pressable onPress={() => setBriefDismissed(true)} hitSlop={10}>
+                <Pressable
+                  onPress={() => setBriefDismissed(true)}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Dismiss morning brief"
+                >
                   <Ionicons name="close" size={16} color={C.faint} />
                 </Pressable>
               </View>
@@ -580,7 +587,12 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                   YOUR NEXT MOVE
                 </Label>
                 <View style={{ flex: 1 }} />
-                <Pressable onPress={openNowModal} hitSlop={8}>
+                <Pressable
+                  onPress={openNowModal}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Why this recommendation was chosen"
+                >
                   <Text style={{ color: C.violet, fontSize: 12, fontWeight: '700' }}>Why? →</Text>
                 </Pressable>
               </View>
@@ -1061,7 +1073,12 @@ export function TodayScreen({ navigation }: { navigation: any }) {
                       ? 'All habits completed today ✨'
                       : `${habitsSummary.totalActive - habitsSummary.completedCount} left to do`}
                   </Text>
-                  <Pressable onPress={openHabitsModal} hitSlop={8}>
+                  <Pressable
+                    onPress={openHabitsModal}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Manage all habits"
+                  >
                     <Text style={{ color: C.violet, fontSize: 12, fontWeight: '700' }}>Manage Habits →</Text>
                   </Pressable>
                 </View>
@@ -1391,6 +1408,8 @@ export function TodayScreen({ navigation }: { navigation: any }) {
               <Pressable
                 key={r.id}
                 onPress={() => completeReminder(r.id)}
+                accessibilityRole="button"
+                accessibilityLabel={`Complete reminder: ${r.title}`}
                 style={{
                   flexDirection: 'row',
                   alignItems: 'center',

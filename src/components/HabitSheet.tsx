@@ -128,7 +128,12 @@ export function HabitSheet({
                 <Text style={styles.subtitle}>Daily recurring behavior</Text>
               </View>
             </View>
-            <Pressable onPress={onClose} hitSlop={10}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close habit editor sheet"
+            >
               <Ionicons name="close" size={20} color={C.sub} />
             </Pressable>
           </View>

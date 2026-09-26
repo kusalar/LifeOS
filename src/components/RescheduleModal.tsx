@@ -78,7 +78,12 @@ export function RescheduleModal({
                     : 'No pending schedule adjustments'}
                 </Text>
               </View>
-              <Pressable onPress={onClose} hitSlop={10}>
+              <Pressable
+                onPress={onClose}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Close rescheduling modal"
+              >
                 <Ionicons name="close" size={22} color={C.sub} />
               </Pressable>
             </View>
@@ -200,6 +205,8 @@ export function RescheduleModal({
                           dismissRescheduleProposal(prop.id);
                           if (proposals.length <= 1) onClose();
                         }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Dismiss adjustment proposal for ${prop.taskTitle}`}
                         style={{
                           width: 44,
                           height: 44,

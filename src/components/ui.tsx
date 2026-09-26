@@ -105,11 +105,13 @@ export function Chip({
   color = C.sub,
   style,
   onPress,
+  accessibilityLabel,
 }: {
   children: React.ReactNode;
   color?: string;
   style?: StyleProp<ViewStyle>;
   onPress?: () => void;
+  accessibilityLabel?: string;
 }) {
   const content = (
     <View
@@ -139,7 +141,12 @@ export function Chip({
 
   if (onPress) {
     return (
-      <Pressable onPress={onPress} hitSlop={6}>
+      <Pressable
+        onPress={onPress}
+        hitSlop={6}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel || (typeof children === 'string' ? children : undefined)}
+      >
         {content}
       </Pressable>
     );
@@ -269,7 +276,7 @@ export function Btn({
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel || (typeof title === 'string' ? title : undefined)}
+      accessibilityLabel={accessibilityLabel || (typeof label === 'string' ? label : undefined)}
       accessibilityHint={accessibilityHint}
       accessibilityState={{ busy: !!loading }}
       style={({ pressed }) => [
@@ -306,15 +313,20 @@ export function CheckCircle({
   checked,
   color = C.green,
   onPress,
+  accessibilityLabel,
 }: {
   checked: boolean;
   color?: string;
   onPress?: () => void;
+  accessibilityLabel?: string;
 }) {
   return (
     <Pressable
       onPress={onPress}
-      hitSlop={8}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel={accessibilityLabel || (checked ? 'Completed' : 'Mark complete')}
+      hitSlop={10}
       style={{
         width: 26,
         height: 26,

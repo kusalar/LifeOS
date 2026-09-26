@@ -156,6 +156,8 @@ export function BudgetSheet({ visible, onClose }: BudgetSheetProps) {
             <Pressable
               onPress={onClose}
               hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close budget editor sheet"
               style={{
                 width: 32,
                 height: 32,

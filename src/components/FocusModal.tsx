@@ -104,7 +104,13 @@ export function FocusModal({
               <View style={[styles.pulseDot, { backgroundColor: isRunning ? C.green : C.amber }]} />
               <Text style={styles.headerTitle}>FOCUS MODE</Text>
             </View>
-            <Pressable onPress={onClose} hitSlop={12} style={styles.closeBtn}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={12}
+              style={styles.closeBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Close focus mode modal"
+            >
               <Ionicons name="close" size={20} color={C.sub} />
             </Pressable>
           </View>
@@ -204,7 +210,13 @@ export function FocusModal({
             </View>
 
             <View style={styles.secondaryRow}>
-              <Pressable onPress={handleStop} hitSlop={10} style={styles.stopPressable}>
+              <Pressable
+                onPress={handleStop}
+                hitSlop={10}
+                style={styles.stopPressable}
+                accessibilityRole="button"
+                accessibilityLabel="Stop and exit focus mode, keeping task active"
+              >
                 <Ionicons name="stop-circle-outline" size={16} color={C.faint} />
                 <Text style={styles.stopText}>Stop & Exit (Keep Task)</Text>
               </Pressable>

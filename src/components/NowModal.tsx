@@ -97,7 +97,12 @@ export function NowModal({
               <Text style={{ color: C.text, fontWeight: '800', fontSize: 18 }}>What Should I Do Now?</Text>
               <Text style={{ color: C.faint, fontSize: 12 }}>Evaluated against deadlines, projects & schedule</Text>
             </View>
-            <Pressable onPress={onClose} hitSlop={10}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close recommendations modal"
+            >
               <Ionicons name="close" size={22} color={C.sub} />
             </Pressable>
           </View>

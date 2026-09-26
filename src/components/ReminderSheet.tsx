@@ -92,7 +92,12 @@ export function ReminderSheet({ visible, onClose }: { visible: boolean; onClose:
               <Text style={{ color: C.text, fontWeight: '800', fontSize: 18 }}>Add Reminder</Text>
               <Text style={{ color: C.faint, fontSize: 12 }}>Type naturally — date & time detected automatically</Text>
             </View>
-            <Pressable onPress={onClose} hitSlop={10}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close add reminder sheet"
+            >
               <Ionicons name="close" size={22} color={C.sub} />
             </Pressable>
           </View>

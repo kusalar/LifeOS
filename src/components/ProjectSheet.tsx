@@ -184,7 +184,12 @@ export function ProjectSheet({
               </Text>
               <Text style={{ color: C.faint, fontSize: 12 }}>Container for related tasks & progress</Text>
             </View>
-            <Pressable onPress={onClose} hitSlop={10}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close project editor sheet"
+            >
               <Ionicons name="close" size={22} color={C.sub} />
             </Pressable>
           </View>

@@ -247,6 +247,7 @@ export function PlannerScreen() {
 
           {/* Segmented Switch */}
           <View
+            accessibilityRole="tablist"
             style={{
               flexDirection: 'row',
               backgroundColor: C.surface2,
@@ -257,15 +258,21 @@ export function PlannerScreen() {
           >
             <Pressable
               onPress={() => setActiveTab('tasks')}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === 'tasks' }}
+              accessibilityLabel={`Tasks tab, ${tasks.filter((t) => !t.done).length} pending`}
               style={{
                 flex: 1,
                 alignItems: 'center',
+                justifyContent: 'center',
                 paddingVertical: 7,
+                minHeight: 38,
                 borderRadius: R.pill,
                 backgroundColor: activeTab === 'tasks' ? C.amber : 'transparent',
               }}
             >
               <Text
+                numberOfLines={1}
                 style={{
                   color: activeTab === 'tasks' ? '#1A1206' : C.sub,
                   fontWeight: '800',
@@ -278,15 +285,21 @@ export function PlannerScreen() {
 
             <Pressable
               onPress={() => setActiveTab('schedule')}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === 'schedule' }}
+              accessibilityLabel={`Timeline tab, ${schedule.length} blocks`}
               style={{
                 flex: 1,
                 alignItems: 'center',
+                justifyContent: 'center',
                 paddingVertical: 7,
+                minHeight: 38,
                 borderRadius: R.pill,
                 backgroundColor: activeTab === 'schedule' ? C.violet : 'transparent',
               }}
             >
               <Text
+                numberOfLines={1}
                 style={{
                   color: activeTab === 'schedule' ? '#150F24' : C.sub,
                   fontWeight: '800',
@@ -299,15 +312,21 @@ export function PlannerScreen() {
 
             <Pressable
               onPress={() => setActiveTab('weekly')}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === 'weekly' }}
+              accessibilityLabel="Weekly planning tab"
               style={{
                 flex: 1,
                 alignItems: 'center',
+                justifyContent: 'center',
                 paddingVertical: 7,
+                minHeight: 38,
                 borderRadius: R.pill,
                 backgroundColor: activeTab === 'weekly' ? C.teal : 'transparent',
               }}
             >
               <Text
+                numberOfLines={1}
                 style={{
                   color: activeTab === 'weekly' ? '#072421' : C.sub,
                   fontWeight: '800',
@@ -320,15 +339,21 @@ export function PlannerScreen() {
 
             <Pressable
               onPress={() => setActiveTab('settings')}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === 'settings' }}
+              accessibilityLabel="Tools and settings tab"
               style={{
                 flex: 1,
                 alignItems: 'center',
+                justifyContent: 'center',
                 paddingVertical: 7,
+                minHeight: 38,
                 borderRadius: R.pill,
                 backgroundColor: activeTab === 'settings' ? C.blue : 'transparent',
               }}
             >
               <Text
+                numberOfLines={1}
                 style={{
                   color: activeTab === 'settings' ? '#07182E' : C.sub,
                   fontWeight: '800',
@@ -1403,6 +1428,8 @@ export function PlannerScreen() {
         {activeTab === 'tasks' ? (
           <Pressable
             onPress={() => openTask()}
+            accessibilityRole="button"
+            accessibilityLabel="Add new task"
             style={({ pressed }) => ({
               position: 'absolute',
               right: 20,

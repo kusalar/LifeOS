@@ -66,7 +66,12 @@ export function HabitsModal({
                 </Text>
               </View>
             </View>
-            <Pressable onPress={onClose} hitSlop={10}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close habits modal"
+            >
               <Ionicons name="close" size={20} color={C.sub} />
             </Pressable>
           </View>
@@ -105,6 +110,9 @@ export function HabitsModal({
                       <Pressable
                         onPress={() => toggleHabit(habit.id)}
                         hitSlop={8}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: streak.isCompletedToday }}
+                        accessibilityLabel={`${habit.name}, ${streak.isCompletedToday ? 'completed' : 'not completed'}`}
                         style={[
                           styles.checkBtn,
                           streak.isCompletedToday && {
@@ -138,6 +146,8 @@ export function HabitsModal({
                         onPress={() => openHabitSheet(habit)}
                         hitSlop={8}
                         style={styles.editBtn}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Edit habit ${habit.name}`}
                       >
                         <Ionicons name="ellipsis-horizontal" size={16} color={C.sub} />
                       </Pressable>

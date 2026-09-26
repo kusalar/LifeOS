@@ -91,7 +91,12 @@ export function ReviewModal({
                 <Text style={styles.subtitle}>{fmtDateLong()}</Text>
               </View>
             </View>
-            <Pressable onPress={onClose} hitSlop={10}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close daily review modal"
+            >
               <Ionicons name="close" size={20} color={C.sub} />
             </Pressable>
           </View>

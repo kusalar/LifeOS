@@ -22,6 +22,7 @@ import { ReviewModal } from './src/components/ReviewModal';
 import { TabBar } from './src/components/TabBar';
 import { TaskSheet } from './src/components/TaskSheet';
 import { OnboardingModal } from './src/components/OnboardingModal';
+import { WeeklyPlanModal } from './src/components/WeeklyPlanModal';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { StoreProvider, UIContext, useStore } from './src/lib/store';
 import { MoneyScreen } from './src/screens/MoneyScreen';
@@ -99,6 +100,7 @@ function Root() {
 
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [rescheduleProposal, setRescheduleProposal] = useState<AdaptiveProposal | null>(null);
+  const [weeklyPlanOpen, setWeeklyPlanOpen] = useState(false);
 
   // Preload icon fonts for web
   const [fontsLoaded] = useFonts({ ...Ionicons.font });
@@ -157,7 +159,7 @@ function Root() {
         openHabitsModal: () => setHabitsModalOpen(true),
         openBreakdownModal: handleOpenBreakdown,
         openRescheduleModal: handleOpenReschedule,
-        openWeeklyPlanModal: () => {},
+        openWeeklyPlanModal: () => setWeeklyPlanOpen(true),
       }}
     >
       <SafeAreaProvider>
@@ -237,6 +239,10 @@ function Root() {
             setRescheduleOpen(false);
             setRescheduleProposal(null);
           }}
+        />
+        <WeeklyPlanModal
+          visible={weeklyPlanOpen}
+          onClose={() => setWeeklyPlanOpen(false)}
         />
 
         <OnboardingModal

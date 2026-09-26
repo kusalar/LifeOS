@@ -124,7 +124,12 @@ export function AskSheet({ visible, onClose }: { visible: boolean; onClose: () =
                 <Text style={{ color: C.text, fontWeight: '800', fontSize: 17 }}>Ask LifeOS</Text>
                 <Text style={{ color: C.faint, fontSize: 12 }}>Decision engine · not another chatbot</Text>
               </View>
-              <Pressable onPress={onClose} hitSlop={10}>
+              <Pressable
+                onPress={onClose}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Close Ask LifeOS sheet"
+              >
                 <Ionicons name="close" size={22} color={C.sub} />
               </Pressable>
             </View>
@@ -154,6 +159,8 @@ export function AskSheet({ visible, onClose }: { visible: boolean; onClose: () =
               />
               <Pressable
                 onPress={() => send()}
+                accessibilityRole="button"
+                accessibilityLabel="Send question to LifeOS"
                 style={{
                   width: 36,
                   height: 36,
@@ -172,6 +179,8 @@ export function AskSheet({ visible, onClose }: { visible: boolean; onClose: () =
                 <Pressable
                   key={sug}
                   onPress={() => send(sug)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Ask suggestion: ${sug}`}
                   style={({ pressed }) => ({
                     borderRadius: R.pill,
                     backgroundColor: C.surface2,

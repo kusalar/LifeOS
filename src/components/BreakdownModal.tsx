@@ -147,7 +147,12 @@ export function BreakdownModal({
                   Deconstruct complex goals into actionable sub-tasks
                 </Text>
               </View>
-              <Pressable onPress={onClose} hitSlop={10}>
+              <Pressable
+                onPress={onClose}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Close breakdown modal"
+              >
                 <Ionicons name="close" size={22} color={C.sub} />
               </Pressable>
             </View>
@@ -257,7 +262,13 @@ export function BreakdownModal({
                     ))}
                   </View>
 
-                  <Pressable onPress={() => removeItem(item.id)} hitSlop={8} style={{ padding: 4 }}>
+                  <Pressable
+                    onPress={() => removeItem(item.id)}
+                    hitSlop={8}
+                    style={{ padding: 4 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove subtask: ${item.title}`}
+                  >
                     <Ionicons name="trash-outline" size={16} color={C.faint} />
                   </Pressable>
                 </View>

@@ -55,7 +55,10 @@ export function TabBar({ state, descriptors, navigation }: BottomTabBarProps) {
           <Pressable
             key={route.key}
             onPress={onPress}
-            style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 6 }}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: focused }}
+            accessibilityLabel={`${String(label)} tab`}
+            style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 6, minHeight: 44 }}
           >
             <View
               style={{

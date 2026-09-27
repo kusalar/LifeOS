@@ -53,6 +53,15 @@ export class SafeLocalCalendarProvider implements CalendarProvider {
         location: 'Faculty Block B',
         isAllDay: false,
       },
+      {
+        id: 'evt-seminar-upcoming',
+        calendarId: 'cal-academic',
+        title: 'Embedded Systems Seminar',
+        start: now.getTime() + 2 * 3600000,
+        end: now.getTime() + 3 * 3600000,
+        location: 'Hall A',
+        isAllDay: false,
+      },
     ];
   }
 

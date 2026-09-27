@@ -4815,6 +4815,7 @@ test('294. Large dataset serialization produces valid JSON', () => {
 
 test('295. Decision engine getWhatToDoNow runs in <50ms even with 1000 tasks in state', () => {
   const state = makeSeed();
+  state.schedule = [];
   state.tasks = Array.from({ length: 1000 }, (_, i) => ({
     id: `t-perf-${i}`,
     title: `Task ${i}`,

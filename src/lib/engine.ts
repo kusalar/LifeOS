@@ -3741,7 +3741,17 @@ export function askLifeOS(qRaw: string, state: AppState): AskReply {
         tone: 'good',
       });
     } else {
-      lines.push({ label: 'Next Event', value: 'No further scheduled blocks today', tone: 'plain' });
+      const scheduledList = state.schedule ?? [];
+      if (scheduledList.length > 0) {
+        const lastBlock = scheduledList[scheduledList.length - 1];
+        lines.push({
+          label: 'Scheduled Event',
+          value: `${lastBlock.title} (${fmtTime(lastBlock.start)}–${fmtTime(lastBlock.end)})`,
+          tone: 'plain',
+        });
+      } else {
+        lines.push({ label: 'Next Event', value: 'No further scheduled blocks today', tone: 'plain' });
+      }
     }
     lines.push({ label: 'Remaining Usable', value: `${ctx.availableMinutes} min`, tone: 'plain' });
 
